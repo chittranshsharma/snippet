@@ -38,6 +38,45 @@ export default function App() {
     join, start, guess, restart, clearError, clearNotice,
   } = useGameSocket();
 
+  // --- Mobile audio unlock (priming) ---------------------------------------
+  // Mobile browsers block programmatic .play() unless the element was first
+  // played inside a real user gesture. We keep ONE persistent <audio> at the
+  // root and "prime" it on the first tap (Enter / Start) by playing a silent
+  // clip. After that, the server-driven .play() each round is allowed — so
+  // mobile autoplays like desktop, removing the tap penalty and the desktop
+  // head-start.
+  const audioRef = useRef(null);
+  const primedRef = useRef(false);
+
+  const primeAudio = () => {
+    if (primedRef.current) return;
+    const el = audioRef.current;
+    if (!el) return;
+    primedRef.current = true; // the gesture happened; don't re-attempt
+    try {
+      // Minimal silent WAV; playing it within the gesture unlocks the element.
+      el.src =
+        "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA";
+      const p = el.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => el.pause()).catch(() => {
+          /* desktop without a prior gesture may defer; harmless */
+        });
+      }
+    } catch {
+      /* ignore — the per-round tap fallback still covers playback */
+    }
+  };
+
+  const handleJoin = (name) => {
+    primeAudio();
+    join(name);
+  };
+  const handleStart = (genre) => {
+    primeAudio();
+    start(genre);
+  };
+
   const phase = state?.phase ?? "LOBBY";
   const players = state?.players ?? [];
   const me = players.find((p) => p.id === myId) || null;
@@ -80,9 +119,9 @@ export default function App() {
           {!connected ? (
             <Centered eyebrow="Status" title="Connecting…" />
           ) : !joined ? (
-            <JoinScreen onJoin={join} />
+            <JoinScreen onJoin={handleJoin} />
           ) : phase === "LOBBY" ? (
-            <Lobby players={players} myId={myId} isHost={isHost} onStart={start} />
+            <Lobby players={players} myId={myId} isHost={isHost} onStart={handleStart} />
           ) : phase === "ROUND_PLAYING" ? (
             <Playing
               state={state}
@@ -93,6 +132,7 @@ export default function App() {
                 setMyGuess(opt);
                 guess(opt);
               }}
+              audioRef={audioRef}
             />
           ) : phase === "ROUND_REVEAL" ? (
             <Reveal reveal={reveal} myId={myId} />
@@ -106,6 +146,9 @@ export default function App() {
           <span>{me ? me.name : "Guest"}</span>
         </footer>
       </div>
+
+      {/* Single persistent, primed audio element reused across all rounds. */}
+      <audio ref={audioRef} preload="auto" className="hidden" />
     </div>
   );
 }
@@ -253,8 +296,7 @@ function Lobby({ players, myId, isHost, onStart }) {
 }
 
 // ---------- Playing ----------
-function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
-  const audioRef = useRef(null);
+function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
   const startRef = useRef(() => {});
   const [needsTap, setNeedsTap] = useState(false);
   const [audioError, setAudioError] = useState(false);
@@ -268,6 +310,12 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
     if (!el) return;
 
     let pauseTimer = null;
+
+    // Point the primed, persistent element at this round's clip. Pause first to
+    // avoid an "interrupted by load()" abort if a previous play is still pending.
+    el.pause();
+    el.src = state.audioUrl;
+    el.load();
 
     const start = () => {
       try {
@@ -302,7 +350,7 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
       el.removeEventListener("error", onError);
       el.pause();
     };
-  }, [state.audioUrl]);
+  }, [state.audioUrl, audioRef]);
 
   // Manual recovery from an audio load/decode failure.
   const retryAudio = () => {
@@ -323,9 +371,6 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
 
   return (
     <div className="space-y-8">
-      {/* hidden audio element; seek + play are driven by the effect via ref */}
-      <audio ref={audioRef} src={state.audioUrl} preload="auto" />
-
       <div className={`${EYEBROW} flex items-center justify-center gap-3 border border-zinc-800 bg-zinc-950 px-4 py-2`}>
         <span>
           Question Value: <span className="text-zinc-200">{questionValue}</span>
