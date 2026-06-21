@@ -9,5 +9,50 @@ body,
 }
 
 body {
-  background: #000;
+  background: #0a0b0d;
+  font-family: "Space Mono", ui-monospace, monospace;
+}
+
+/* ----- CRT signature ----- */
+/* Scanlines: a fixed, non-interactive overlay over whatever uses .crt-scan. */
+.crt-scan::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background: repeating-linear-gradient(
+    rgba(0, 0, 0, 0) 0 2px,
+    rgba(0, 0, 0, 0.16) 2px 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+/* Phosphor bloom on amber numerals (the scoreboard). */
+.phosphor {
+  color: #ffb000;
+  text-shadow: 0 0 2px rgba(255, 176, 0, 0.7), 0 0 10px rgba(255, 176, 0, 0.45);
+}
+.phosphor-bad {
+  color: #ff5c5c;
+  text-shadow: 0 0 2px rgba(255, 92, 92, 0.7), 0 0 10px rgba(255, 92, 92, 0.45);
+}
+
+/* Barrel vignette on the play frame. */
+.bezel {
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.55);
+}
+
+/* Respect reduced-motion: kill scanlines + all animation/transition. */
+@media (prefers-reduced-motion: reduce) {
+  .crt-scan::after {
+    background: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

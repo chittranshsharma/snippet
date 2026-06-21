@@ -1,30 +1,29 @@
 // App — React client for the multiplayer music guessing game.
 //
-// Design: monochrome "mixtape J-card" — ink/bone/concrete, hairline borders,
-// zero radius, uppercase mono labels. The one bold element is the tape-counter
-// timecode. Green/red are used ONLY to mark answers on reveal, never as decor.
+// Design: "minimalist arcade" — bone on void, one amber CRT phosphor accent,
+// Space Mono scoreboard, hairline rules, zero radius. The signature is the CRT
+// timer/score. Green/red appear ONLY on reveal to mark answers (+ glyphs).
 //
-// Client rules honored here:
-//   - Never stores/computes the correct answer (only reads reveal.correct,
-//     which arrives after the round ends).
-//   - Never sends a score. Only join/start/guess/restart leave the client.
-//   - All game truth comes from the server via useGameSocket.
+// IMPORTANT: this file is presentation only. The socket/data contract is
+// untouched — every prop, event, and server field is wired exactly as before.
 
 import { useEffect, useRef, useState } from "react";
 import { useGameSocket } from "./useGameSocket";
 
-// ---- Shared class fragments (kept consistent across screens) ----
-const EYEBROW = "font-mono text-[11px] uppercase tracking-[0.3em] text-zinc-500";
-const PANEL = "border border-zinc-800 bg-zinc-950";
-const BTN =
-  "border border-zinc-100 px-5 py-3 font-mono text-sm uppercase tracking-[0.2em] " +
-  "text-zinc-100 transition-colors hover:bg-zinc-100 hover:text-black " +
-  "focus:outline-none focus:ring-2 focus:ring-zinc-100 focus:ring-offset-2 focus:ring-offset-black " +
-  "disabled:cursor-not-allowed disabled:border-zinc-700 disabled:text-zinc-600 disabled:hover:bg-transparent";
+// ---- Shared class fragments (drive the look across every screen) ----
+const EYEBROW = "font-console text-[11px] uppercase tracking-[0.2em] text-dim";
+const PANEL = "border border-rule bg-cabinet";
+const BTN_AMBER =
+  "bg-amber px-5 py-4 font-console text-sm uppercase tracking-[0.2em] text-black " +
+  "transition-[transform,background-color] hover:bg-[#ffc233] active:scale-[.98] " +
+  "focus:outline-none focus:ring-2 focus:ring-amber focus:ring-offset-2 focus:ring-offset-void " +
+  "disabled:cursor-not-allowed disabled:bg-rule disabled:text-dim";
+const BTN_GHOST =
+  "border border-rule bg-cabinet px-5 py-3 font-console text-sm uppercase tracking-[0.2em] text-bone " +
+  "transition-colors hover:border-amber hover:text-amber active:scale-[.98] " +
+  "focus:outline-none focus:ring-2 focus:ring-amber disabled:cursor-not-allowed disabled:opacity-50";
 
-// Fallback scoring constants, mirroring server.js. The banner now reads the
-// authoritative values from the server's roundStart event (hook roundMeta);
-// these are only used if that event hasn't arrived yet.
+// Fallback scoring constants, mirroring server.js (banner uses roundMeta first).
 const QUESTION_BASE = 300;
 const QUESTION_STEP = 250;
 const MAX_SPEED_BONUS = 350;
@@ -39,12 +38,8 @@ export default function App() {
   } = useGameSocket();
 
   // --- Mobile audio unlock (priming) ---------------------------------------
-  // Mobile browsers block programmatic .play() unless the element was first
-  // played inside a real user gesture. We keep ONE persistent <audio> at the
-  // root and "prime" it on the first tap (Enter / Start) by playing a silent
-  // clip. After that, the server-driven .play() each round is allowed — so
-  // mobile autoplays like desktop, removing the tap penalty and the desktop
-  // head-start.
+  // One persistent <audio> at the root, primed on the first tap (Enter/Start)
+  // so mobile autoplays each round without the tap penalty.
   const audioRef = useRef(null);
   const primedRef = useRef(false);
 
@@ -52,19 +47,16 @@ export default function App() {
     if (primedRef.current) return;
     const el = audioRef.current;
     if (!el) return;
-    primedRef.current = true; // the gesture happened; don't re-attempt
+    primedRef.current = true;
     try {
-      // Minimal silent WAV; playing it within the gesture unlocks the element.
       el.src =
         "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA";
       const p = el.play();
       if (p && typeof p.then === "function") {
-        p.then(() => el.pause()).catch(() => {
-          /* desktop without a prior gesture may defer; harmless */
-        });
+        p.then(() => el.pause()).catch(() => {});
       }
     } catch {
-      /* ignore — the per-round tap fallback still covers playback */
+      /* ignore — per-round tap fallback still covers playback */
     }
   };
 
@@ -105,8 +97,13 @@ export default function App() {
     return () => clearTimeout(t);
   }, [notice, clearNotice]);
 
+  const handleGuess = (opt) => {
+    setMyGuess(opt);
+    guess(opt);
+  };
+
   return (
-    <div className="min-h-screen bg-black text-zinc-100 antialiased selection:bg-zinc-100 selection:text-black">
+    <div className="crt-scan min-h-screen bg-void font-console text-bone antialiased selection:bg-amber selection:text-black">
       {error && <ErrorBar message={error} />}
       {loading && <LoadingOverlay message={loading.message} />}
       {countdown && (
@@ -120,7 +117,7 @@ export default function App() {
       )}
       {notice && <Toast message={notice} />}
 
-      <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-5 pt-6 pb-8">
+      <div className="mx-auto flex min-h-screen max-w-xl flex-col px-5 pt-6 pb-8">
         <Masthead phase={phase} round={round} total={state?.totalRounds} />
 
         <main className="flex flex-1 flex-col justify-start py-8">
@@ -136,10 +133,7 @@ export default function App() {
               roundMeta={roundMeta}
               myGuess={myGuess}
               hasGuessed={Boolean(myGuess) || Boolean(me?.hasGuessed)}
-              onGuess={(opt) => {
-                setMyGuess(opt);
-                guess(opt);
-              }}
+              onGuess={handleGuess}
               audioRef={audioRef}
             />
           ) : phase === "ROUND_REVEAL" ? (
@@ -149,9 +143,9 @@ export default function App() {
           ) : null}
         </main>
 
-        <footer className={`${EYEBROW} flex items-center justify-between border-t border-zinc-900 pt-4`}>
+        <footer className={`${EYEBROW} flex items-center justify-between border-t border-rule pt-4`}>
           <span>{connected ? "● Online" : "○ Offline"}</span>
-          <span>{me ? me.name : "Guest"}</span>
+          <span className="text-bone">{me ? me.name : "Guest"}</span>
         </footer>
       </div>
 
@@ -170,9 +164,9 @@ function Masthead({ phase, round, total }) {
       ? "Side B · Final"
       : "Side A · Lobby";
   return (
-    <header className="flex items-end justify-between border-b border-zinc-800 pb-4">
-      <h1 className="text-2xl font-black uppercase leading-none tracking-tighter sm:text-3xl">
-        Name<span className="text-zinc-600">·</span>That<span className="text-zinc-600">·</span>Track
+    <header className="flex items-end justify-between border-b border-rule pb-4">
+      <h1 className="font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
+        Name<span className="text-amber">·</span>That<span className="text-amber">·</span>Track
       </h1>
       <span className={EYEBROW}>{label}</span>
     </header>
@@ -188,25 +182,28 @@ function JoinScreen({ onJoin }) {
     if (n) onJoin(n);
   };
   return (
-    <form onSubmit={submit} className="mx-auto w-full max-w-sm">
-      <p className={EYEBROW}>Step in</p>
-      <h2 className="mt-2 text-4xl font-black uppercase tracking-tighter">Tag in.</h2>
-      <p className="mt-2 font-mono text-sm text-zinc-500">Pick a handle to enter the cypher.</p>
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        maxLength={20}
-        placeholder="YOUR HANDLE"
-        aria-label="Your handle"
-        className="mt-8 w-full rounded-none border-0 border-b-2 border-zinc-500 bg-transparent px-1 py-3 font-mono text-lg uppercase tracking-widest placeholder:text-zinc-600 focus:border-white focus:outline-none"
-      />
-      <button
-        type="submit"
-        disabled={!name.trim()}
-        className="mt-6 w-full bg-white px-5 py-4 font-mono text-sm uppercase tracking-[0.2em] text-black transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
-      >
-        Enter
+    <form onSubmit={submit} className="mx-auto w-full max-w-sm animate-rise">
+      <p className="font-coin text-base leading-relaxed text-amber">INSERT COIN</p>
+      <div className="mt-3 h-px w-24 bg-rule" />
+      <p className="mt-4 font-console text-sm text-dim">Pick a handle to play.</p>
+
+      <div className="mt-8 flex items-center border-b-2 border-rule focus-within:border-amber">
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={20}
+          placeholder="YOUR HANDLE"
+          aria-label="Your handle"
+          className="w-full bg-transparent px-1 py-3 font-console text-lg uppercase tracking-widest text-bone placeholder:text-dim focus:outline-none"
+        />
+        {name.length === 0 && (
+          <span className="mr-1 h-5 w-2 animate-blink bg-amber" aria-hidden="true" />
+        )}
+      </div>
+
+      <button type="submit" disabled={!name.trim()} className={`${BTN_AMBER} mt-6 w-full`}>
+        Press Start
       </button>
     </form>
   );
@@ -226,26 +223,25 @@ function Lobby({ players, myId, isHost, onStart }) {
       /* clipboard blocked — the field is selectable as a fallback */
     }
   };
-
   const shortUrl = url.length > 40 ? url.slice(0, 39) + "…" : url;
 
   return (
     <div className="space-y-8">
       <div>
-        <p className={EYEBROW}>{players.length} / 8 players</p>
-        <ul className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+        <p className={EYEBROW}>Players {String(players.length).padStart(2, "0")} / 08</p>
+        <ul className={`mt-3 ${PANEL} divide-y divide-rule`}>
           {players.map((p, i) => (
             <li
               key={p.id}
-              className={`flex items-center justify-between px-4 py-3 ${i % 2 === 0 ? "bg-zinc-900" : "bg-zinc-800"}`}
+              className={`flex items-center justify-between px-4 py-3 ${i % 2 ? "bg-void/40" : ""}`}
             >
               <span className="flex items-center gap-3">
-                <span className="font-mono text-xs text-zinc-600">{String(i + 1).padStart(2, "0")}</span>
-                <span className="font-mono uppercase tracking-wide">{p.name}</span>
+                <span className="font-console text-xs text-amber">{i + 1}UP</span>
+                <span className="font-console uppercase tracking-wide text-bone">{p.name}</span>
               </span>
-              <span className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.2em]">
-                {p.id === myId && <span className="text-zinc-400">You</span>}
-                {i === 0 && <span className="text-amber-400">[Host]</span>}
+              <span className="flex items-center gap-3 font-console text-[10px] uppercase tracking-[0.2em]">
+                {p.id === myId && <span className="text-dim">· You</span>}
+                {i === 0 && <span className="text-amber">[Host]</span>}
               </span>
             </li>
           ))}
@@ -261,9 +257,9 @@ function Lobby({ players, myId, isHost, onStart }) {
             title={url}
             onFocus={(e) => e.target.select()}
             aria-label="Room URL"
-            className="min-w-0 flex-1 border border-zinc-800 bg-zinc-950 px-3 py-3 font-mono text-xs text-zinc-400 focus:outline-none"
+            className="min-w-0 flex-1 border border-rule bg-cabinet px-3 py-3 font-console text-xs text-dim focus:outline-none"
           />
-          <button onClick={copy} className={BTN}>
+          <button onClick={copy} className={BTN_GHOST}>
             {copied ? "Copied" : "Copy"}
           </button>
         </div>
@@ -280,10 +276,10 @@ function Lobby({ players, myId, isHost, onStart }) {
                   <button
                     key={g}
                     onClick={() => setGenre(g)}
-                    className={`px-3 py-2 font-mono text-xs uppercase tracking-[0.2em] transition-colors ${
+                    className={`px-3 py-2 font-console text-xs uppercase tracking-[0.2em] transition-colors ${
                       active
-                        ? "bg-white text-black"
-                        : "border border-zinc-600 text-zinc-400 hover:border-zinc-400"
+                        ? "bg-amber text-black"
+                        : "border border-rule text-dim hover:border-amber hover:text-amber"
                     }`}
                   >
                     {g}
@@ -292,12 +288,14 @@ function Lobby({ players, myId, isHost, onStart }) {
               })}
             </div>
           </div>
-          <button onClick={() => onStart(genre.toLowerCase())} className={`${BTN} w-full py-5 text-base`}>
+          <button onClick={() => onStart(genre.toLowerCase())} className={`${BTN_AMBER} w-full`}>
             ▶ Start Game
           </button>
         </div>
       ) : (
-        <p className={`${EYEBROW} text-center`}>Waiting for host to drop the needle…</p>
+        <p className={`${EYEBROW} text-center`}>
+          <span className="animate-blink text-amber">▍</span> Waiting for host
+        </p>
       )}
     </div>
   );
@@ -310,9 +308,7 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
   const [audioError, setAudioError] = useState(false);
 
   // Play a 10-second snippet from a random offset that always leaves room.
-  // Seeking needs loaded metadata, so wait for it if the clip isn't ready yet.
-  // The snippet auto-starts; if the browser blocks playback, show a tap
-  // fallback that runs the exact same start logic.
+  // Drives the persistent, primed root <audio> element via audioRef.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -327,7 +323,6 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
 
     const start = () => {
       try {
-        // Random offset that always leaves room for the 10s snippet.
         const maxOffset = Math.max(0, el.duration - 10);
         el.currentTime = Math.random() * Math.min(15, maxOffset);
       } catch {
@@ -345,11 +340,10 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
     };
     startRef.current = start;
 
-    // If the clip fails to load/decode, surface a retry control.
     const onError = () => setAudioError(true);
     el.addEventListener("error", onError);
 
-    if (el.readyState >= 1) start(); // metadata already available -> seek now
+    if (el.readyState >= 1) start();
     else el.addEventListener("loadedmetadata", start, { once: true });
 
     return () => {
@@ -369,23 +363,30 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
     el.play().then(() => setNeedsTap(false)).catch(() => setNeedsTap(true));
   };
 
+  // Arcade keys 1-4 to answer (also an a11y win). Guard once-guessed.
+  useEffect(() => {
+    if (hasGuessed) return;
+    const onKey = (e) => {
+      const i = parseInt(e.key, 10);
+      if (i >= 1 && i <= (state.options?.length ?? 0)) onGuess(state.options[i - 1]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasGuessed, state.options, onGuess]);
+
   const seconds = useCountdown(state.timeRemainingMs, state.round);
 
-  // Round value banner. Prefer the server's roundStart values (roundMeta);
-  // fall back to the derived formula only if that event hasn't arrived yet.
+  // Round value chip. Prefer the server's roundStart values (roundMeta).
   const questionValue =
     roundMeta?.questionValue ?? QUESTION_BASE + (state.round - 1) * QUESTION_STEP;
   const maxSpeedBonus = roundMeta?.maxSpeedBonus ?? MAX_SPEED_BONUS;
 
   return (
-    <div className="space-y-8">
-      <div className={`${EYEBROW} flex items-center justify-center gap-3 border border-zinc-800 bg-zinc-950 px-4 py-2`}>
-        <span>
-          Question Value: <span className="text-zinc-200">{questionValue}</span>
-        </span>
-        <span className="text-zinc-700">|</span>
-        <span>
-          Speed Bonus: <span className="text-zinc-200">{maxSpeedBonus}</span>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <span className={EYEBROW}>Now playing</span>
+        <span className="font-console text-xs uppercase tracking-[0.18em] text-dim">
+          QV <span className="text-amber">{questionValue}</span> · Speed ≤{maxSpeedBonus}
         </span>
       </div>
 
@@ -394,41 +395,45 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
       {audioError && (
         <button
           onClick={retryAudio}
-          className="w-full border border-amber-400 px-5 py-3 font-mono text-sm uppercase tracking-[0.2em] text-amber-300 transition-colors hover:bg-amber-400 hover:text-black"
+          className="w-full border border-amber px-5 py-3 font-console text-sm uppercase tracking-[0.2em] text-amber transition-colors hover:bg-amber hover:text-black"
         >
           Audio failed — tap to retry
         </button>
       )}
 
       {needsTap && (
-        <button onClick={() => startRef.current()} className={`${BTN} w-full`}>
+        <button onClick={() => startRef.current()} className={`${BTN_GHOST} w-full`}>
           ▶ Tap to play clip
         </button>
       )}
 
       <div className="grid gap-3">
-        {state.options.map((opt) => {
+        {state.options.map((opt, i) => {
           const selected = myGuess === opt;
-          const dimmed = hasGuessed && !selected; // Feature 4: lock animation
+          const dimmed = hasGuessed && !selected; // lock animation
           return (
             <div key={opt}>
               <button
                 onClick={() => onGuess(opt)}
                 disabled={hasGuessed}
                 className={[
-                  "w-full border px-5 py-4 text-left font-mono text-sm uppercase tracking-wide transition-all",
+                  "flex w-full items-center gap-4 border px-4 py-4 text-left font-console text-sm uppercase tracking-wide transition-all",
                   selected
-                    ? "border-zinc-100 bg-zinc-900 text-zinc-100"
-                    : "border-zinc-700 bg-zinc-800 text-white enabled:hover:bg-white enabled:hover:text-zinc-900",
-                  hasGuessed && selected ? "ring-2 ring-white" : "",
+                    ? "border-amber bg-amber/10 text-bone ring-2 ring-amber"
+                    : "border-rule bg-cabinet text-bone enabled:hover:border-amber enabled:hover:bg-amber/10",
                   dimmed ? "pointer-events-none opacity-30" : "",
                   "disabled:cursor-not-allowed",
                 ].join(" ")}
               >
-                {opt}
+                <span className={`font-console text-xs ${selected ? "text-amber" : "text-dim"}`}>
+                  {i + 1}
+                </span>
+                <span className="min-w-0 truncate">{opt}</span>
               </button>
               {hasGuessed && selected && (
-                <p className="mt-1 font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">Locked in</p>
+                <p className="mt-1 font-console text-xs uppercase tracking-[0.2em] text-amber">
+                  Locked
+                </p>
               )}
             </div>
           );
@@ -436,7 +441,7 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
       </div>
 
       {!hasGuessed && (
-        <p className={`${EYEBROW} text-center`}>Pick the track. Faster = more points.</p>
+        <p className={`${EYEBROW} text-center`}>Pick the track — faster = more points · keys 1-4</p>
       )}
     </div>
   );
@@ -450,7 +455,6 @@ function Reveal({ reveal, myId }) {
   const leaderboard =
     reveal?.leaderboard ??
     [...results].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
-  // roundWinner carries name + time; pull their points from the results list.
   const winnerResult = winner ? results.find((r) => r.name === winner.name) : null;
   const winnerPoints = winnerResult?.pointsEarned ?? 0;
   const winnerStreak = winnerResult?.streakBonus ?? 0;
@@ -459,55 +463,57 @@ function Reveal({ reveal, myId }) {
     <div className="space-y-6">
       <p className={EYEBROW}>Round {String(round).padStart(2, "0")} / 10</p>
 
-      {/* Winner card: left green accent, big points */}
+      {/* Winner card: HIGH SCORE, amber left accent, big points */}
       {winner ? (
-        <div className="border border-zinc-600 border-l-4 border-l-green-400 bg-zinc-950 px-5 py-5">
-          <p className={`${EYEBROW} text-green-400`}>Fastest this round</p>
+        <div className="border border-rule border-l-4 border-l-amber bg-cabinet px-5 py-5">
+          <p className="font-coin text-xs text-amber">HIGH SCORE</p>
           <div className="mt-3 flex items-end justify-between gap-4">
             <div className="min-w-0">
-              <p className="truncate text-2xl font-black uppercase tracking-tighter text-zinc-100">
+              <p className="truncate font-marquee text-2xl font-black uppercase tracking-tight text-bone">
                 {winner.name}
               </p>
-              <p className="mt-1 font-mono text-xs tabular-nums text-zinc-500">{winner.answerTimeSeconds}s</p>
+              <p className="mt-1 font-console text-xs tabular-nums text-dim">{winner.answerTimeSeconds}s</p>
             </div>
-            <p className="shrink-0 font-mono text-3xl font-bold tabular-nums text-green-400">+{winnerPoints}</p>
+            <p className="shrink-0 animate-scoreroll font-marquee text-3xl font-black tabular-nums text-amber">
+              +{winnerPoints}
+            </p>
           </div>
           {winnerStreak > 0 && (
-            <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.2em] text-amber-400">
-              🔥 streak +{winnerStreak}
+            <p className="mt-2 font-console text-[11px] uppercase tracking-[0.2em] text-amber">
+              Streak +{winnerStreak}
             </p>
           )}
         </div>
       ) : (
-        <div className="border border-zinc-700 bg-zinc-950 px-5 py-6 text-center">
-          <p className="text-2xl font-black uppercase tracking-tighter text-zinc-500">No one got it</p>
+        <div className="border border-rule bg-cabinet px-5 py-6 text-center">
+          <p className="font-marquee text-2xl font-black uppercase tracking-tight text-dim">No one got it</p>
         </div>
       )}
 
       {/* Per-player results: name | answer time | correct/wrong | points */}
       <div>
         <p className={EYEBROW}>This round</p>
-        <ul className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+        <ul className={`mt-3 ${PANEL} divide-y divide-rule`}>
           {results.map((r) => {
             const answered = r.answerTimeSeconds != null;
             const isMe = myId && r.id === myId;
             return (
               <li
                 key={r.id ?? r.name}
-                className={`flex items-center justify-between gap-3 px-4 py-3 ${isMe ? "bg-zinc-900/60" : ""}`}
+                className={`flex items-center justify-between gap-3 px-4 py-3 ${isMe ? "bg-void/40" : ""}`}
               >
                 <span className="flex min-w-0 items-center gap-3">
                   <StatusDot correct={r.correct} answered={answered} />
-                  <span className="truncate font-mono uppercase tracking-wide">{r.name}</span>
+                  <span className="truncate font-console uppercase tracking-wide text-bone">{r.name}</span>
                   {r.streakBonus > 0 && (
-                    <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-amber-400">
-                      🔥{r.currentStreak}
+                    <span className="shrink-0 font-console text-[10px] uppercase tracking-wide text-amber">
+                      +{r.currentStreak} st
                     </span>
                   )}
                 </span>
-                <span className="flex items-center gap-4 font-mono text-sm tabular-nums">
-                  <span className="text-zinc-500">{answered ? `${r.answerTimeSeconds}s` : "—"}</span>
-                  <span className={r.correct ? "text-green-400" : "text-zinc-600"}>+{r.pointsEarned}</span>
+                <span className="flex items-center gap-4 font-console text-sm tabular-nums">
+                  <span className="text-dim">{answered ? `${r.answerTimeSeconds}s` : "—"}</span>
+                  <span className={r.correct ? "text-good" : "text-dim"}>+{r.pointsEarned}</span>
                 </span>
               </li>
             );
@@ -515,7 +521,6 @@ function Reveal({ reveal, myId }) {
         </ul>
       </div>
 
-      {/* Cumulative leaderboard */}
       <Leaderboard rows={leaderboard} myId={myId} title="Leaderboard" />
     </div>
   );
@@ -523,10 +528,10 @@ function Reveal({ reveal, myId }) {
 
 // Correct / wrong / no-answer marker for the reveal list.
 function StatusDot({ correct, answered }) {
-  const cls = !answered ? "text-zinc-700" : correct ? "text-green-400" : "text-red-500";
+  const cls = !answered ? "text-dim" : correct ? "text-good" : "text-bad";
   const mark = !answered ? "○" : correct ? "✓" : "✗";
   return (
-    <span className={`w-4 text-center font-mono text-sm ${cls}`} aria-hidden="true">
+    <span className={`w-4 text-center font-console text-sm ${cls}`} aria-hidden="true">
       {mark}
     </span>
   );
@@ -534,7 +539,6 @@ function StatusDot({ correct, answered }) {
 
 // ---------- Game Over ----------
 function GameOver({ gameOver, players, onRestart }) {
-  // Prefer the server's final leaderboard; fall back to the last state snapshot.
   const rows =
     gameOver?.leaderboard ??
     [...players].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
@@ -544,28 +548,31 @@ function GameOver({ gameOver, players, onRestart }) {
 
   return (
     <div className="space-y-8">
-      <p className={`${EYEBROW} text-center`}>That's a wrap</p>
+      <p className="text-center font-marquee text-4xl font-black uppercase tracking-tight text-bone">
+        Game Over
+      </p>
 
-      {/* Champion card */}
       {champ && (
-        <div className="border border-zinc-500 bg-zinc-950 px-6 py-6 text-center">
-          <p className={`${EYEBROW} text-amber-400`}>Champion</p>
-          <p className="mt-2 text-2xl font-black uppercase tracking-tighter text-zinc-100">{champ.name}</p>
-          <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-white">{champ.score}</p>
+        <div className="border border-amber bg-cabinet px-6 py-6 text-center">
+          <p className="font-coin text-xs text-amber">1UP · Champion</p>
+          <p className="mt-3 font-console uppercase tracking-wide text-bone">{champ.name}</p>
+          <p className="mt-1 animate-scoreroll font-marquee text-4xl font-black tabular-nums text-amber">
+            {champ.score}
+          </p>
         </div>
       )}
 
       {rest.length > 0 && (
         <div>
-          <p className={EYEBROW}>Final scores</p>
-          <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+          <p className={EYEBROW}>High scores</p>
+          <ol className={`mt-3 ${PANEL} divide-y divide-rule`}>
             {rest.map((r, i) => (
               <li key={r.id ?? r.name ?? i} className="flex items-center justify-between px-4 py-2.5">
                 <span className="flex items-center gap-3">
-                  <span className="w-6 font-mono text-xs text-zinc-600">{String(r.rank ?? i + 2).padStart(2, "0")}</span>
-                  <span className="font-mono text-sm uppercase tracking-wide text-zinc-400">{r.name}</span>
+                  <span className="w-6 font-console text-xs text-dim">{String(r.rank ?? i + 2).padStart(2, "0")}</span>
+                  <span className="font-console text-sm uppercase tracking-wide text-dim">{r.name}</span>
                 </span>
-                <span className="font-mono text-sm tabular-nums text-zinc-400">{r.score}</span>
+                <span className="font-console text-sm tabular-nums text-dim">{r.score}</span>
               </li>
             ))}
           </ol>
@@ -574,10 +581,7 @@ function GameOver({ gameOver, players, onRestart }) {
 
       {history && history.length > 0 && <RoundHistory history={history} />}
 
-      <button
-        onClick={onRestart}
-        className="w-full bg-white px-5 py-4 font-mono text-base uppercase tracking-[0.2em] text-black transition-colors hover:bg-zinc-200"
-      >
+      <button onClick={onRestart} className={`${BTN_AMBER} w-full`}>
         ↻ Play again
       </button>
     </div>
@@ -591,21 +595,21 @@ function RoundHistory({ history }) {
     <div>
       <button
         onClick={() => setOpen((o) => !o)}
-        className={`${EYEBROW} flex w-full items-center gap-2 text-left hover:text-zinc-300`}
+        className={`${EYEBROW} flex w-full items-center gap-2 text-left hover:text-amber`}
       >
-        <span>{open ? "▼" : "▶"}</span> See all rounds
+        <span className="text-amber">{open ? "▼" : "▶"}</span> See all rounds
       </button>
       {open && (
-        <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+        <ol className={`mt-3 ${PANEL} divide-y divide-rule`}>
           {history.map((h, i) => (
-            <li key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 font-mono text-xs">
+            <li key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 font-console text-xs">
               <span className="flex min-w-0 items-center gap-3">
-                <span className="w-6 text-zinc-600">{String(i + 1).padStart(2, "0")}</span>
-                <span className="truncate text-zinc-600">
-                  <span className="text-zinc-400">{h.artistName}</span> — {h.trackName}
+                <span className="w-6 text-dim">{String(i + 1).padStart(2, "0")}</span>
+                <span className="truncate text-dim">
+                  <span className="text-bone">{h.artistName}</span> — {h.trackName}
                 </span>
               </span>
-              <span className="shrink-0 uppercase tracking-wide text-zinc-200">{h.winner || "No one"}</span>
+              <span className="shrink-0 uppercase tracking-wide text-amber">{h.winner || "No one"}</span>
             </li>
           ))}
         </ol>
@@ -619,20 +623,24 @@ function Leaderboard({ rows, myId, title }) {
   return (
     <div>
       {title && <p className={EYEBROW}>{title}</p>}
-      <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+      <ol className={`mt-3 ${PANEL} divide-y divide-rule`}>
         {rows.map((r, i) => {
           const isMe = myId && r.id === myId;
           const top = i === 0;
           return (
             <li
               key={r.id ?? r.name ?? i}
-              className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-zinc-900/60" : ""}`}
+              className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-void/40" : ""}`}
             >
               <span className="flex items-center gap-3">
-                <span className="w-6 font-mono text-xs text-zinc-600">{String(r.rank ?? i + 1).padStart(2, "0")}</span>
-                <span className={`font-mono uppercase tracking-wide ${top ? "text-white" : "text-zinc-400"}`}>{r.name}</span>
+                <span className={`w-6 font-console text-xs ${top ? "text-amber" : "text-dim"}`}>
+                  {String(r.rank ?? i + 1).padStart(2, "0")}
+                </span>
+                <span className={`font-console uppercase tracking-wide ${top ? "text-bone" : "text-dim"}`}>
+                  {r.name}
+                </span>
               </span>
-              <span className={`font-mono tabular-nums ${top ? "text-white" : "text-zinc-400"}`}>{r.score}</span>
+              <span className={`font-console tabular-nums ${top ? "text-amber" : "text-dim"}`}>{r.score}</span>
             </li>
           );
         })}
@@ -641,6 +649,7 @@ function Leaderboard({ rows, myId, title }) {
   );
 }
 
+// The CRT scoreboard — the design signature.
 function TimeCounter({ seconds }) {
   const total = 10; // server round length; bar is display-only
   const pct = Math.max(0, Math.min(100, (seconds / total) * 100));
@@ -648,20 +657,23 @@ function TimeCounter({ seconds }) {
   const mm = Math.floor(seconds / 60);
   const ss = String(seconds % 60).padStart(2, "0");
   return (
-    <div>
-      <div className="flex items-end justify-between">
+    <div className="bezel border border-rule bg-cabinet px-4 py-5">
+      <div className="flex items-center justify-between">
         <span className={EYEBROW}>Time</span>
+        <span className={EYEBROW}>{Math.round(pct)}%</span>
+      </div>
+      <div className="mt-1 text-center">
         <span
-          className={`font-mono text-6xl font-bold tabular-nums leading-none ${
-            low ? "text-red-400" : "text-zinc-100"
+          className={`font-console text-7xl font-bold tabular-nums leading-none ${
+            low ? "phosphor-bad animate-flicker" : "phosphor"
           }`}
         >
           {mm}:{ss}
         </span>
       </div>
-      <div className="mt-3 h-1 w-full bg-zinc-900">
+      <div className="mt-4 h-1.5 w-full bg-rule">
         <div
-          className={`h-full transition-all duration-1000 ease-linear ${low ? "bg-red-500" : "bg-zinc-100"}`}
+          className={`h-full transition-all duration-1000 ease-linear ${low ? "bg-bad" : "bg-amber"}`}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -669,19 +681,11 @@ function TimeCounter({ seconds }) {
   );
 }
 
-function Tag({ children }) {
-  return (
-    <span className="border border-zinc-700 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-      {children}
-    </span>
-  );
-}
-
 function Centered({ eyebrow, title }) {
   return (
     <div className="text-center">
       <p className={EYEBROW}>{eyebrow}</p>
-      <h2 className="mt-2 text-3xl font-black uppercase tracking-tighter">{title}</h2>
+      <h2 className="mt-2 font-marquee text-3xl font-black uppercase tracking-tight text-bone">{title}</h2>
     </div>
   );
 }
@@ -690,7 +694,7 @@ function ErrorBar({ message }) {
   return (
     <div
       role="alert"
-      className="fixed inset-x-0 top-0 z-50 border-b border-rose-500 bg-rose-500/10 px-5 py-3 text-center font-mono text-xs uppercase tracking-[0.2em] text-rose-300 backdrop-blur"
+      className="fixed inset-x-0 top-0 z-50 border-b border-bad bg-void/90 px-5 py-3 text-center font-console text-xs uppercase tracking-[0.2em] text-bad backdrop-blur"
     >
       {message}
     </div>
@@ -702,7 +706,7 @@ function Toast({ message }) {
   return (
     <div
       role="status"
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-700 bg-zinc-900 px-5 py-3 text-center font-mono text-xs uppercase tracking-[0.2em] text-zinc-300"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-rule bg-cabinet px-5 py-3 text-center font-console text-xs uppercase tracking-[0.2em] text-dim"
     >
       {message}
     </div>
@@ -711,16 +715,17 @@ function Toast({ message }) {
 
 function LoadingOverlay({ message }) {
   return (
-    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-black/95">
-      <div className="h-12 w-12 animate-spin rounded-full border-2 border-zinc-800 border-t-zinc-100" />
-      <p className={EYEBROW}>{message}</p>
+    <div className="crt-scan fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-void/95">
+      <p className="font-coin text-xs text-amber">LOADING</p>
+      <p className="font-console text-sm uppercase tracking-[0.2em] text-dim">
+        {message} <span className="animate-blink text-amber">▍</span>
+      </p>
     </div>
   );
 }
 
-// 3-2-1-GO overlay shown before each round's audio (Feature 3). Also shows what
-// the round is worth and the max points for the fastest correct answer. The
-// server controls the real 3s gap; this just animates the count locally.
+// 3-2-1-GO overlay shown before each round's audio (Feature 3). Also shows the
+// round's point worth + max-if-fastest. Server controls the real 3s gap.
 function CountdownOverlay({ seconds, round, worth, maxPoints }) {
   const [n, setN] = useState(seconds ?? 3);
   useEffect(() => {
@@ -734,17 +739,21 @@ function CountdownOverlay({ seconds, round, worth, maxPoints }) {
     return () => clearInterval(id);
   }, [seconds]);
   return (
-    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-black/95 px-6 text-center">
-      <p className={EYEBROW}>Round {String(round ?? 0).padStart(2, "0")} · get ready</p>
-      <span className="font-mono text-8xl font-black tabular-nums text-zinc-100">
-        {n > 0 ? n : "GO"}
-      </span>
+    <div className="crt-scan fixed inset-0 z-40 flex flex-col items-center justify-center gap-6 bg-void/95 px-6 text-center">
+      <p className={EYEBROW}>Round {String(round ?? 0).padStart(2, "0")}</p>
+      {n > 0 ? (
+        <span className="animate-flicker font-marquee text-8xl font-black tabular-nums leading-none phosphor">
+          {n}
+        </span>
+      ) : (
+        <span className="font-coin text-5xl leading-none phosphor">GO</span>
+      )}
       {worth != null && (
         <div className="space-y-1">
-          <p className="font-mono text-sm uppercase tracking-[0.2em] text-zinc-300">
-            Worth <span className="text-white">{worth}</span> pts this round
+          <p className="font-console text-sm uppercase tracking-[0.2em] text-bone">
+            Worth <span className="text-amber">{worth}</span> pts this round
           </p>
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-green-400">
+          <p className="font-console text-xs uppercase tracking-[0.2em] text-amber">
             Up to {maxPoints} if you answer fastest
           </p>
         </div>
@@ -765,8 +774,6 @@ function useCountdown(timeRemainingMs, round) {
     tick();
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
-    // Re-seed only when the round changes, so mid-round state updates don't
-    // jitter the visible countdown.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [round]);
   return seconds;
