@@ -550,16 +550,42 @@ io.on("connection", (socket) => {
     broadcastState();
   });
 
-  // --- disconnect: drop the player and keep the room consistent ---
+  // --- disconnect: drop the player and keep the room consistent (Feature 5) ---
   socket.on("disconnect", () => {
-    if (!players.has(socket.id)) return;
+    const player = players.get(socket.id);
+    if (!player) return;
+
+    const wasHost = [...players.keys()][0] === socket.id; // host = first in room
+    const name = player.name;
     players.delete(socket.id);
+
+    // Notify the room that someone left.
+    io.emit("playerLeft", { name }); // SAFE: no correct answer field
 
     if (players.size === 0) {
       // Nobody left: stop all timers and return to a clean lobby.
       resetToLobby();
-    } else if (room.phase === PHASE.ROUND_PLAYING && allGuessed()) {
-      // The leaver may have been the last one we were waiting on.
+      broadcastState();
+      return;
+    }
+
+    // The host left -> promote the next player and announce it.
+    if (wasHost) {
+      const next = players.values().next().value;
+      if (next) io.emit("newHost", { name: next.name }); // SAFE
+    }
+
+    // One player left mid-game: flag it. (We keep playing rather than truly
+    // pausing, since no one can rejoin mid-game to un-pause.)
+    if (
+      players.size === 1 &&
+      (room.phase === PHASE.ROUND_PLAYING || room.phase === PHASE.ROUND_REVEAL)
+    ) {
+      io.emit("waitingForPlayers", {}); // SAFE
+    }
+
+    // The leaver may have been the last one we were waiting on this round.
+    if (room.phase === PHASE.ROUND_PLAYING && allGuessed()) {
       endRound();
       return;
     }

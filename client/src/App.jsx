@@ -34,8 +34,8 @@ const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
 
 export default function App() {
   const {
-    connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown,
-    join, start, guess, restart, clearError,
+    connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown, notice,
+    join, start, guess, restart, clearError, clearNotice,
   } = useGameSocket();
 
   const phase = state?.phase ?? "LOBBY";
@@ -59,11 +59,19 @@ export default function App() {
     return () => clearTimeout(t);
   }, [error, clearError]);
 
+  // Auto-dismiss bottom toasts.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(clearNotice, 3000);
+    return () => clearTimeout(t);
+  }, [notice, clearNotice]);
+
   return (
     <div className="min-h-screen bg-black text-zinc-100 antialiased selection:bg-zinc-100 selection:text-black">
       {error && <ErrorBar message={error} />}
       {loading && <LoadingOverlay message={loading.message} />}
       {countdown && <CountdownOverlay key={countdown.round} seconds={countdown.seconds} />}
+      {notice && <Toast message={notice} />}
 
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-5 pt-6 pb-8">
         <Masthead phase={phase} round={round} total={state?.totalRounds} />
@@ -630,6 +638,18 @@ function ErrorBar({ message }) {
     <div
       role="alert"
       className="fixed inset-x-0 top-0 z-50 border-b border-rose-500 bg-rose-500/10 px-5 py-3 text-center font-mono text-xs uppercase tracking-[0.2em] text-rose-300 backdrop-blur"
+    >
+      {message}
+    </div>
+  );
+}
+
+// Bottom toast for room notices (player left, new host) — Feature 5.
+function Toast({ message }) {
+  return (
+    <div
+      role="status"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-700 bg-zinc-900 px-5 py-3 text-center font-mono text-xs uppercase tracking-[0.2em] text-zinc-300"
     >
       {message}
     </div>

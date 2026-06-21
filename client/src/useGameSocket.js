@@ -25,6 +25,7 @@ export function useGameSocket() {
   const [error, setError] = useState(null); // transient error message
   const [roundMeta, setRoundMeta] = useState(null); // { questionValue, maxSpeedBonus, roundIndex }
   const [countdown, setCountdown] = useState(null); // { seconds, round } during the 3-2-1
+  const [notice, setNotice] = useState(null); // transient bottom toast (player left, new host)
 
   useEffect(() => {
     // Same-origin connection. In dev, Vite proxies /socket.io to the game
@@ -69,6 +70,11 @@ export function useGameSocket() {
       setLoading(null);
     });
 
+    // Room membership notices (Feature 5) -> bottom toast.
+    socket.on("playerLeft", (d) => setNotice(`${d?.name || "A player"} left`));
+    socket.on("newHost", (d) => setNotice(`${d?.name || "Someone"} is now host`));
+    socket.on("waitingForPlayers", () => setNotice("Waiting for more players…"));
+
     // Game over: final leaderboard.
     socket.on("gameOver", (g) => setGameOver(g));
 
@@ -92,6 +98,7 @@ export function useGameSocket() {
   const guess = useCallback((option) => socketRef.current?.emit("guess", { option }), []);
   const restart = useCallback(() => socketRef.current?.emit("restart"), []);
   const clearError = useCallback(() => setError(null), []);
+  const clearNotice = useCallback(() => setNotice(null), []);
 
   return {
     connected,
@@ -103,10 +110,12 @@ export function useGameSocket() {
     error,
     roundMeta,
     countdown,
+    notice,
     join,
     start,
     guess,
     restart,
     clearError,
+    clearNotice,
   };
 }
