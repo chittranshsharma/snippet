@@ -14,6 +14,7 @@ const MAX_PLAYERS = 8;
 const TOTAL_ROUNDS = 10;
 const ROUND_MS = 10000;   // round length, server-side only (10 seconds)
 const REVEAL_MS = 3000;   // pause on the reveal screen before next round
+const EARLY_END_GRACE_MS = 3000; // keep the clip playing this long after everyone answers
 // Scoring: question value escalates per round; speed bonus decays linearly.
 const QUESTION_BASE = 300;    // round 0 base value
 const QUESTION_STEP = 250;    // added per round index
@@ -255,8 +256,15 @@ function startRound(n) {
     p.lastCorrect = false;
   }
 
-  // SAFE: no correct answer field. Just a 3-2-1 cue.
-  io.emit("countdown", { seconds: 3, round: n });
+  // SAFE: no correct answer field. 3-2-1 cue + this round's point worth.
+  const qv = questionValueFor(n - 1);
+  io.emit("countdown", {
+    seconds: 3,
+    round: n,
+    questionValue: qv,
+    maxSpeedBonus: MAX_SPEED_BONUS,
+    maxPoints: qv + MAX_SPEED_BONUS,
+  });
   countdownTimer = setTimeout(beginPlaying, 3000);
 }
 
@@ -287,6 +295,19 @@ function beginPlaying() {
   // Broadcast the round WITHOUT the correct answer.
   broadcastState();
   roundTimer = setTimeout(endRound, ROUND_MS);
+}
+
+// Everyone has answered: let the clip keep playing briefly before the reveal
+// instead of cutting it off instantly. Reveals at the grace point or the
+// natural round end, whichever is sooner.
+function endRoundSoon() {
+  if (room.phase !== PHASE.ROUND_PLAYING) return;
+  const remaining = ROUND_MS - (Date.now() - room.roundStartedAt);
+  if (remaining > EARLY_END_GRACE_MS) {
+    clearTimeout(roundTimer);
+    roundTimer = setTimeout(endRound, EARLY_END_GRACE_MS);
+  }
+  // else the existing round timer already fires soon at the natural end.
 }
 
 // Pool top-up: if the pool is nearly exhausted, fetch a fresh one during the
@@ -560,8 +581,9 @@ io.on("connection", (socket) => {
 
     broadcastState();
 
-    // If everyone has answered, end the round early.
-    if (allGuessed()) endRound();
+    // Everyone answered: keep the clip playing a moment longer (grace) instead
+    // of cutting it off instantly, then reveal.
+    if (allGuessed()) endRoundSoon();
   });
 
   // --- restart: from GAME_OVER back to the lobby ---
@@ -610,8 +632,7 @@ io.on("connection", (socket) => {
 
     // The leaver may have been the last one we were waiting on this round.
     if (room.phase === PHASE.ROUND_PLAYING && allGuessed()) {
-      endRound();
-      return;
+      endRoundSoon();
     }
 
     broadcastState();

@@ -109,7 +109,15 @@ export default function App() {
     <div className="min-h-screen bg-black text-zinc-100 antialiased selection:bg-zinc-100 selection:text-black">
       {error && <ErrorBar message={error} />}
       {loading && <LoadingOverlay message={loading.message} />}
-      {countdown && <CountdownOverlay key={countdown.round} seconds={countdown.seconds} />}
+      {countdown && (
+        <CountdownOverlay
+          key={countdown.round}
+          seconds={countdown.seconds}
+          round={countdown.round}
+          worth={countdown.questionValue}
+          maxPoints={countdown.maxPoints}
+        />
+      )}
       {notice && <Toast message={notice} />}
 
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-5 pt-6 pb-8">
@@ -710,9 +718,10 @@ function LoadingOverlay({ message }) {
   );
 }
 
-// 3-2-1-GO overlay shown before each round's audio (Feature 3). The server
-// controls the real 3s gap; this just animates the count locally.
-function CountdownOverlay({ seconds }) {
+// 3-2-1-GO overlay shown before each round's audio (Feature 3). Also shows what
+// the round is worth and the max points for the fastest correct answer. The
+// server controls the real 3s gap; this just animates the count locally.
+function CountdownOverlay({ seconds, round, worth, maxPoints }) {
   const [n, setN] = useState(seconds ?? 3);
   useEffect(() => {
     let v = seconds ?? 3;
@@ -725,11 +734,21 @@ function CountdownOverlay({ seconds }) {
     return () => clearInterval(id);
   }, [seconds]);
   return (
-    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-black/95">
-      <p className={EYEBROW}>Get ready</p>
+    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-black/95 px-6 text-center">
+      <p className={EYEBROW}>Round {String(round ?? 0).padStart(2, "0")} · get ready</p>
       <span className="font-mono text-8xl font-black tabular-nums text-zinc-100">
         {n > 0 ? n : "GO"}
       </span>
+      {worth != null && (
+        <div className="space-y-1">
+          <p className="font-mono text-sm uppercase tracking-[0.2em] text-zinc-300">
+            Worth <span className="text-white">{worth}</span> pts this round
+          </p>
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-green-400">
+            Up to {maxPoints} if you answer fastest
+          </p>
+        </div>
+      )}
     </div>
   );
 }
