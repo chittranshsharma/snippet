@@ -45,11 +45,15 @@ const room = {
   roundStartedAt: 0,       // server timestamp when the round began
   guesses: new Map(),      // this round's guesses: socketId -> { option, elapsedMs }
   genre: "hip-hop",        // current game's genre/search term (for pool refetch)
+  pending: null,           // next round's built data, held during the countdown
+  correctArtist: null,     // current round's correct artist (for round history)
+  history: [],             // per-round recap: { trackName, artistName, winner }
 };
 
-let roundTimer = null;   // fires when the 10s round window closes
-let revealTimer = null;  // fires when the reveal pause ends
-let refreshing = false;  // true while a fresh pool is being fetched mid-game
+let roundTimer = null;     // fires when the 10s round window closes
+let revealTimer = null;    // fires when the reveal pause ends
+let countdownTimer = null; // fires when the 3-2-1 countdown ends
+let refreshing = false;    // true while a fresh pool is being fetched mid-game
 
 // ----- Helpers -----
 
@@ -57,8 +61,10 @@ let refreshing = false;  // true while a fresh pool is being fetched mid-game
 function clearTimers() {
   if (roundTimer) clearTimeout(roundTimer);
   if (revealTimer) clearTimeout(revealTimer);
+  if (countdownTimer) clearTimeout(countdownTimer);
   roundTimer = null;
   revealTimer = null;
+  countdownTimer = null;
 }
 
 // Trim and bound a player-supplied name. Never trust client input.
@@ -121,6 +127,7 @@ function buildRound(pool, usedTrackIds) {
     audioUrl: correct.previewUrl,
     options,
     correct: correct.trackName,
+    artistName: correct.artistName,
     trackId: correct.trackId,
   };
 }
@@ -204,6 +211,9 @@ function resetToLobby() {
   room.correct = null;
   room.roundStartedAt = 0;
   room.guesses = new Map();
+  room.pending = null;
+  room.correctArtist = null;
+  room.history = [];
   for (const p of players.values()) {
     p.score = 0;
     p.streak = 0;
@@ -213,7 +223,7 @@ function resetToLobby() {
   }
 }
 
-// Begin round number `n`.
+// Begin round `n` with a 3-2-1 countdown, then the audio (Feature 3).
 function startRound(n) {
   // If everyone left, do not run a ghost round.
   if (players.size === 0) {
@@ -224,28 +234,46 @@ function startRound(n) {
 
   clearTimers();
   room.round = n;
-  room.phase = PHASE.ROUND_PLAYING;
 
-  // Build this round from the pre-fetched pool. correct is stored server-side
-  // only; only audioUrl + the 4 option names ever reach clients.
+  // Build this round now, but HOLD it (audio/options/answer) until the
+  // countdown ends. The phase stays on the previous screen during the
+  // countdown, so the guess handler's phase check rejects any early guess and
+  // the upcoming audio never leaks via a state broadcast.
   const picked = buildRound(room.pool, room.usedTrackIds);
   room.usedTrackIds.add(picked.trackId);
-  room.audioUrl = picked.audioUrl;
-  room.options = picked.options;
-  room.correct = picked.correct;
-
-  room.roundStartedAt = Date.now();
-  room.guesses = new Map(); // clear last round's stored guesses
+  room.pending = picked;
 
   // Fresh guess state for the new round.
+  room.guesses = new Map();
   for (const p of players.values()) {
     p.hasGuessed = false;
     p.lastRoundScore = 0;
     p.lastCorrect = false;
   }
 
-  // Tell clients this round's value + speed-bonus ceiling (no answer here).
-  const roundIndex = n - 1;
+  // SAFE: no correct answer field. Just a 3-2-1 cue.
+  io.emit("countdown", { seconds: 3, round: n });
+  countdownTimer = setTimeout(beginPlaying, 3000);
+}
+
+// Reveal the audio + options and start the round clock (after the countdown).
+function beginPlaying() {
+  if (players.size === 0 || !room.pending) {
+    resetToLobby();
+    broadcastState();
+    return;
+  }
+  const picked = room.pending;
+  room.pending = null;
+  room.phase = PHASE.ROUND_PLAYING;
+  room.audioUrl = picked.audioUrl;
+  room.options = picked.options;
+  room.correct = picked.correct; // SERVER-ONLY
+  room.correctArtist = picked.artistName;
+  room.roundStartedAt = Date.now();
+
+  const roundIndex = room.round - 1;
+  // SAFE: no correct answer field.
   io.emit("roundStart", {
     questionValue: questionValueFor(roundIndex),
     maxSpeedBonus: MAX_SPEED_BONUS,
@@ -254,8 +282,6 @@ function startRound(n) {
 
   // Broadcast the round WITHOUT the correct answer.
   broadcastState();
-
-  // The authoritative round clock. When it fires, the round is over.
   roundTimer = setTimeout(endRound, ROUND_MS);
 }
 

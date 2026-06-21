@@ -24,6 +24,7 @@ export function useGameSocket() {
   const [loading, setLoading] = useState(null); // { message } while server is busy
   const [error, setError] = useState(null); // transient error message
   const [roundMeta, setRoundMeta] = useState(null); // { questionValue, maxSpeedBonus, roundIndex }
+  const [countdown, setCountdown] = useState(null); // { seconds, round } during the 3-2-1
 
   useEffect(() => {
     // Same-origin connection. In dev, Vite proxies /socket.io to the game
@@ -46,7 +47,10 @@ export function useGameSocket() {
     socket.on("state", (s) => {
       setState(s);
       setLoading(null);
-      if (s.phase === "ROUND_PLAYING") setReveal(null);
+      if (s.phase === "ROUND_PLAYING") {
+        setReveal(null);
+        setCountdown(null);
+      }
       if (s.phase !== "GAME_OVER") setGameOver(null);
     });
 
@@ -54,7 +58,16 @@ export function useGameSocket() {
     socket.on("reveal", (r) => setReveal(r));
 
     // Round start: authoritative scoring values for this round's banner.
-    socket.on("roundStart", (data) => setRoundMeta(data));
+    socket.on("roundStart", (data) => {
+      setRoundMeta(data);
+      setCountdown(null);
+    });
+
+    // 3-2-1 countdown before the audio plays.
+    socket.on("countdown", (d) => {
+      setCountdown(d || { seconds: 3 });
+      setLoading(null);
+    });
 
     // Game over: final leaderboard.
     socket.on("gameOver", (g) => setGameOver(g));
@@ -89,6 +102,7 @@ export function useGameSocket() {
     loading,
     error,
     roundMeta,
+    countdown,
     join,
     start,
     guess,

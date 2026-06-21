@@ -34,7 +34,7 @@ const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
 
 export default function App() {
   const {
-    connected, myId, state, reveal, gameOver, loading, error, roundMeta,
+    connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown,
     join, start, guess, restart, clearError,
   } = useGameSocket();
 
@@ -63,6 +63,7 @@ export default function App() {
     <div className="min-h-screen bg-black text-zinc-100 antialiased selection:bg-zinc-100 selection:text-black">
       {error && <ErrorBar message={error} />}
       {loading && <LoadingOverlay message={loading.message} />}
+      {countdown && <CountdownOverlay key={countdown.round} seconds={countdown.seconds} />}
 
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-5 pt-6 pb-8">
         <Masthead phase={phase} round={round} total={state?.totalRounds} />
@@ -633,6 +634,30 @@ function LoadingOverlay({ message }) {
     <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-black/95">
       <div className="h-12 w-12 animate-spin rounded-full border-2 border-zinc-800 border-t-zinc-100" />
       <p className={EYEBROW}>{message}</p>
+    </div>
+  );
+}
+
+// 3-2-1-GO overlay shown before each round's audio (Feature 3). The server
+// controls the real 3s gap; this just animates the count locally.
+function CountdownOverlay({ seconds }) {
+  const [n, setN] = useState(seconds ?? 3);
+  useEffect(() => {
+    let v = seconds ?? 3;
+    setN(v);
+    const id = setInterval(() => {
+      v -= 1;
+      setN(v);
+      if (v <= -1) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [seconds]);
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-black/95">
+      <p className={EYEBROW}>Get ready</p>
+      <span className="font-mono text-8xl font-black tabular-nums text-zinc-100">
+        {n > 0 ? n : "GO"}
+      </span>
     </div>
   );
 }
