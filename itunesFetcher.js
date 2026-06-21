@@ -12,7 +12,9 @@
 import fetch from "node-fetch";
 
 // ----- Constants -----
-const SEARCH_BASE = "https://itunes.apple.com/search";
+// The endpoint is overridable via ITUNES_BASE so tests can point at a local
+// fixture server (offline, deterministic) instead of the live iTunes API.
+const SEARCH_BASE = process.env.ITUNES_BASE || "https://itunes.apple.com/search";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const ITUNES_MAX_LIMIT = 200;        // hard ceiling enforced by the iTunes API
 const MIN_DURATION_MS = 20 * 1000;   // duration must be > 20 seconds

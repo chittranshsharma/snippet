@@ -11,6 +11,19 @@ import { Server } from "socket.io";
 import { fetchSongs } from "./itunesFetcher.js";
 import { OAuth2Client } from "google-auth-library";
 import { maskProfanity } from "./profanity.js";
+import {
+  DEFAULT_SETTINGS,
+  MAX_SPEED_BONUS,
+  sanitizeSettings,
+  poolSizeFor,
+  cleanName,
+  buildRound,
+  questionValueFor,
+  speedBonusFor,
+  streakBonusFor,
+} from "./gameLogic.js";
+import { log } from "./log.js";
+import { initStorage, recordMatch, topScores } from "./storage.js";
 
 // ----- Configuration -----
 const PORT = process.env.PORT || 3000;
@@ -23,54 +36,12 @@ const MAX_SPECTATORS = 16; // watchers allowed per room (don't count toward MAX_
 const REJOIN_GRACE_MS = 60000; // hold a disconnected player's slot this long mid-game
 const REVEAL_MS = 3000; // pause on the reveal screen before next round
 const EARLY_END_GRACE_MS = 3000; // keep the clip playing this long after everyone answers
-const QUESTION_BASE = 300;
-const QUESTION_STEP = 250;
-const MAX_SPEED_BONUS = 350;
-const ALLOWED_GENRES = ["hip-hop", "r&b", "rap", "drill", "trap"];
-
-// ----- Host-configurable match settings (validated server-side) -----
-// Each is an allowlist; anything off-list snaps back to the default (first item
-// is the default). The client only *requests* settings — the server decides.
-const ROUND_CHOICES = [10, 5, 15]; // total rounds
-const TIMER_CHOICES = [10000, 7500, 15000]; // round length in ms
-const OPTION_CHOICES = [4, 3, 6]; // answers shown per round
-const MODE_CHOICES = ["TITLE", "ARTIST"]; // guess the song title or the artist
-const DECADE_CHOICES = ["all", "2020s", "2010s", "2000s", "1990s"];
-
 // Chat + reactions. Reactions are a fixed whitelist of arcade-style call-outs
 // (typographic, not emoji — keeps the §12 design rule) floated over the game.
+// Match settings, scoring, and round-building live in ./gameLogic.js (imported
+// above) so they can be unit-tested without a running server.
 const REACTIONS = ["GG", "WOW", "!!", "??", "★", "♥"];
 const CHAT_MAX_LEN = 200;
-
-const DEFAULT_SETTINGS = {
-  rounds: ROUND_CHOICES[0],
-  roundMs: TIMER_CHOICES[0],
-  optionsCount: OPTION_CHOICES[0],
-  mode: MODE_CHOICES[0],
-  decade: DECADE_CHOICES[0],
-  genre: "hip-hop",
-};
-
-// Coerce an untrusted settings payload into a safe, fully-populated object.
-function sanitizeSettings(payload) {
-  const p = payload && typeof payload === "object" ? payload : {};
-  const pick = (val, choices) => (choices.includes(val) ? val : choices[0]);
-  const genre = String(p.genre ?? "").toLowerCase();
-  return {
-    rounds: pick(Number(p.rounds), ROUND_CHOICES),
-    roundMs: pick(Number(p.roundMs), TIMER_CHOICES),
-    optionsCount: pick(Number(p.optionsCount), OPTION_CHOICES),
-    mode: pick(String(p.mode || "").toUpperCase(), MODE_CHOICES),
-    decade: pick(String(p.decade || "").toLowerCase(), DECADE_CHOICES),
-    genre: ALLOWED_GENRES.includes(genre) ? genre : DEFAULT_SETTINGS.genre,
-  };
-}
-
-// Pool size needed for a match: enough distinct tracks for every round plus a
-// full set of distractors, with headroom. Bounded so we never hammer the API.
-function poolSizeFor(settings) {
-  return Math.min(60, Math.max(16, settings.rounds + settings.optionsCount + 6));
-}
 
 // Google OAuth (optional). If GOOGLE_CLIENT_ID is unset, sign-in is disabled and
 // everyone plays as a guest.
@@ -258,17 +229,7 @@ function finalizeLeave(room, id) {
   broadcastState(room);
 }
 
-// ----- Pure helpers (room-independent) -----
-
-// S2 (sanitize): allow letters, digits, space, underscore, and hyphen only,
-// then mask any profanity in guest handles.
-function cleanName(raw) {
-  const cleaned = String(raw ?? "")
-    .replace(/[^a-zA-Z0-9 _\-]/g, "")
-    .trim()
-    .slice(0, 20);
-  return maskProfanity(cleaned);
-}
+// ----- Identity (room-independent) -----
 
 // Resolve identity from a create/join payload. With a Google ID token (and
 // GOOGLE_CLIENT_ID configured) the token is VERIFIED server-side and the Google
@@ -290,78 +251,6 @@ async function resolveIdentity(payload) {
   const name = cleanName(payload && payload.name);
   if (!name) return { error: "Enter a valid handle." };
   return { name, google: false };
-}
-
-function shuffle(list) {
-  const out = list.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
-
-// Build one round: a correct track + (optionsCount - 1) distractors. In TITLE
-// mode the options are track names; in ARTIST mode they are artist names. Every
-// option is a distinct value AND (where the pool allows) a distinct artist, so
-// the answer is never trivially duplicated.
-function buildRound(pool, usedTrackIds, settings) {
-  const optionsCount = settings.optionsCount;
-  const need = optionsCount - 1;
-  const valueOf = settings.mode === "ARTIST" ? (t) => t.artistName : (t) => t.trackName;
-
-  const unused = pool.filter((t) => !usedTrackIds.has(t.trackId));
-  const candidates = unused.length > 0 ? unused : pool;
-  const correct = candidates[Math.floor(Math.random() * candidates.length)];
-  const correctValue = valueOf(correct);
-
-  const usedValues = new Set([correctValue]);
-  const usedArtists = new Set([correct.artistName]);
-  const distractors = [];
-  const others = shuffle(pool.filter((t) => t.trackId !== correct.trackId));
-
-  // First pass: distinct artist and distinct displayed value.
-  for (const t of others) {
-    if (distractors.length === need) break;
-    if (usedArtists.has(t.artistName)) continue;
-    if (usedValues.has(valueOf(t))) continue;
-    distractors.push(t);
-    usedArtists.add(t.artistName);
-    usedValues.add(valueOf(t));
-  }
-  // Fallback: relax the distinct-artist rule, keep distinct displayed values.
-  if (distractors.length < need) {
-    for (const t of others) {
-      if (distractors.length === need) break;
-      if (usedValues.has(valueOf(t))) continue;
-      distractors.push(t);
-      usedValues.add(valueOf(t));
-    }
-  }
-
-  const options = shuffle([correctValue, ...distractors.map(valueOf)]);
-  return {
-    audioUrl: correct.previewUrl,
-    options,
-    correct: correctValue, // the gradable answer for this mode
-    artistName: correct.artistName,
-    trackName: correct.trackName,
-    trackId: correct.trackId,
-  };
-}
-
-function questionValueFor(roundIndex) {
-  return QUESTION_BASE + roundIndex * QUESTION_STEP;
-}
-function speedBonusFor(elapsedMs, roundMs) {
-  const ratio = Math.max(0, Math.min(1, (roundMs - elapsedMs) / roundMs));
-  return Math.round(MAX_SPEED_BONUS * ratio);
-}
-function streakBonusFor(streak) {
-  if (streak >= 4) return 200;
-  if (streak === 3) return 100;
-  if (streak === 2) return 50;
-  return 0;
 }
 
 // ----- Per-room helpers -----
@@ -629,10 +518,23 @@ function gameOver(room) {
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
   io.to(room.code).emit("gameOver", { leaderboard, roundHistory: room.history }); // SAFE: round over
   broadcastState(room);
+  // Persist final scores for the global leaderboard (no-op without DATABASE_URL).
+  recordMatch({ players: [...room.players.values()], settings: room.settings }, log);
 }
 
 // ----- HTTP + Socket.IO -----
-const httpServer = http.createServer((req, res) => {
+const httpServer = http.createServer(async (req, res) => {
+  const cors = Array.isArray(CLIENT_ORIGIN) ? CLIENT_ORIGIN[0] : CLIENT_ORIGIN;
+  res.setHeader("Access-Control-Allow-Origin", cors || "*");
+
+  // Global leaderboard (only meaningful when DATABASE_URL is configured).
+  if (req.method === "GET" && req.url && req.url.startsWith("/leaderboard")) {
+    const rows = await topScores(20);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ leaderboard: rows }));
+    return;
+  }
+
   let players = 0;
   for (const r of rooms.values()) players += r.players.size;
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -640,6 +542,61 @@ const httpServer = http.createServer((req, res) => {
 });
 
 const io = new Server(httpServer, { cors: { origin: CLIENT_ORIGIN } });
+
+// ----- Optional, env-gated scale/observability hooks -----
+// Each is DORMANT unless its env var is set AND the package is installed. They
+// degrade to a warning and never block the game.
+
+// Redis adapter: fans out socket broadcasts across multiple backend instances.
+// NOTE: room/game state still lives in this process's memory, so players in the
+// same room must reach the same instance (use sticky sessions). This is the
+// groundwork for full horizontal scale, not a complete multi-instance story.
+async function maybeAttachRedis() {
+  const url = process.env.REDIS_URL;
+  if (!url) return;
+  try {
+    const [{ createAdapter }, { default: IORedis }] = await Promise.all([
+      import("@socket.io/redis-adapter"),
+      import("ioredis"),
+    ]);
+    const pub = new IORedis(url);
+    const sub = pub.duplicate();
+    io.adapter(createAdapter(pub, sub));
+    log.info("redis adapter attached");
+  } catch (e) {
+    log.warn("REDIS_URL set but adapter not attached; install @socket.io/redis-adapter + ioredis", {
+      error: String((e && e.message) || e),
+    });
+  }
+}
+
+// Sentry error monitoring (optional). Captures uncaught errors if configured.
+let sentry = null;
+async function maybeInitSentry() {
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) return;
+  try {
+    sentry = await import("@sentry/node");
+    sentry.init({ dsn, tracesSampleRate: 0 });
+    log.info("sentry initialized");
+  } catch (e) {
+    log.warn("SENTRY_DSN set but @sentry/node not installed", { error: String((e && e.message) || e) });
+  }
+}
+
+maybeAttachRedis();
+maybeInitSentry();
+initStorage(log);
+
+// Last-resort safety nets: log (and report) instead of crashing silently.
+process.on("uncaughtException", (err) => {
+  log.error("uncaughtException", { error: String((err && err.stack) || err) });
+  if (sentry) try { sentry.captureException(err); } catch {}
+});
+process.on("unhandledRejection", (reason) => {
+  log.error("unhandledRejection", { error: String(reason) });
+  if (sentry) try { sentry.captureException(reason); } catch {}
+});
 
 io.on("connection", (socket) => {
   // --- createRoom: open a new room and become host ---
@@ -925,5 +882,5 @@ io.on("connection", (socket) => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`Snippet server listening on :${PORT} (origins: ${JSON.stringify(CLIENT_ORIGIN)})`);
+  log.info("snippet server listening", { port: Number(PORT), origins: CLIENT_ORIGIN });
 });
