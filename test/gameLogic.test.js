@@ -23,12 +23,15 @@ const POOL = [
 
 describe("sanitizeSettings", () => {
   it("accepts valid values", () => {
-    expect(sanitizeSettings({ rounds: 15, roundMs: 7500, optionsCount: 6, mode: "artist", decade: "2010s", genre: "rap" })).toEqual({
+    expect(
+      sanitizeSettings({ rounds: 15, roundMs: 7500, optionsCount: 6, mode: "artist", decade: "2010s", clip: "intro", genre: "rap" })
+    ).toEqual({
       rounds: 15,
       roundMs: 7500,
       optionsCount: 6,
       mode: "ARTIST",
       decade: "2010s",
+      clip: "INTRO",
       genre: "rap",
     });
   });

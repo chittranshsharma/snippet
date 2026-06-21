@@ -16,6 +16,10 @@ export const TIMER_CHOICES = [10000, 7500, 15000];
 export const OPTION_CHOICES = [4, 3, 6];
 export const MODE_CHOICES = ["TITLE", "ARTIST"];
 export const DECADE_CHOICES = ["all", "2020s", "2010s", "2000s", "1990s"];
+// Clip start: RANDOM plays from a random offset; INTRO (Heardle-style) plays
+// from the very start of the track. The offset itself is applied client-side;
+// the server just records the choice and tells the client via state.clip.
+export const CLIP_CHOICES = ["RANDOM", "INTRO"];
 export const ALLOWED_GENRES = ["hip-hop", "r&b", "rap", "drill", "trap"];
 
 export const DEFAULT_SETTINGS = {
@@ -24,6 +28,7 @@ export const DEFAULT_SETTINGS = {
   optionsCount: OPTION_CHOICES[0],
   mode: MODE_CHOICES[0],
   decade: DECADE_CHOICES[0],
+  clip: CLIP_CHOICES[0],
   genre: "hip-hop",
 };
 
@@ -38,6 +43,7 @@ export function sanitizeSettings(payload) {
     optionsCount: pick(Number(p.optionsCount), OPTION_CHOICES),
     mode: pick(String(p.mode || "").toUpperCase(), MODE_CHOICES),
     decade: pick(String(p.decade || "").toLowerCase(), DECADE_CHOICES),
+    clip: pick(String(p.clip || "").toUpperCase(), CLIP_CHOICES),
     genre: ALLOWED_GENRES.includes(genre) ? genre : DEFAULT_SETTINGS.genre,
   };
 }

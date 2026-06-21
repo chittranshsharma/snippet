@@ -272,6 +272,7 @@ function publicState(room) {
     totalRounds: room.settings.rounds,
     roundMs: room.settings.roundMs, // round length, so the client bar matches
     mode: room.settings.mode, // TITLE | ARTIST — for client labels only
+    clip: room.settings.clip, // RANDOM | INTRO — client picks the audio offset
     maxPlayers: MAX_PLAYERS,
     isPublic: room.isPublic,
     audioUrl: inRound ? room.audioUrl : null,

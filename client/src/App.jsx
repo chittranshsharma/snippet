@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useGameSocket } from "./useGameSocket";
 import sound from "./sound";
+import { getStats, recordGame } from "./stats";
 
 // ---- Shared class fragments (drive the look across every screen) ----
 const EYEBROW = "font-console text-[11px] uppercase tracking-[0.2em] text-dim";
@@ -36,6 +37,19 @@ const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
 // Reaction call-outs (must match the server's REACTIONS whitelist). Typographic,
 // not emoji — keeps the §12 design rule while still being expressive.
 const REACTION_TOKENS = ["GG", "WOW", "!!", "??", "★", "♥"];
+
+// The music-games catalog shown on the Home hub and in the side menu. Each
+// "play" game routes into the room flow (some preset a clip mode); "soon" games
+// are placeholders. Glyphs are typographic marks, not emoji (§12).
+const GAMES = [
+  { key: "musicquiz", glyph: "♬", title: "Music Quiz", sub: "Name the track from a 10s snippet", status: "play", clip: "RANDOM" },
+  { key: "heardle", glyph: "▶", title: "Heardle", sub: "Guess the song from its intro", status: "play", clip: "INTRO" },
+  { key: "create", glyph: "+", title: "Create", sub: "Private room — challenge your friends", status: "play", clip: "RANDOM" },
+  { key: "harmonies", glyph: "⌘", title: "Harmonies", sub: "Music connections puzzle", status: "soon" },
+  { key: "wordzic", glyph: "▦", title: "Wordzic", sub: "Guess the music word", status: "soon" },
+  { key: "lyricles", glyph: "❝", title: "Lyricles", sub: "Guess the song from its lyrics", status: "soon" },
+  { key: "crosszic", glyph: "✚", title: "Crosszic", sub: "Music crossword puzzle", status: "soon" },
+];
 
 // Host-configurable match settings. Each option is { label, value } and the
 // value is sent to the server, which re-validates against its own allowlist.
@@ -64,6 +78,10 @@ const DECADE_OPTS = [
   { label: "2010s", value: "2010s" },
   { label: "2000s", value: "2000s" },
   { label: "90s", value: "1990s" },
+];
+const CLIP_OPTS = [
+  { label: "Random", value: "RANDOM" },
+  { label: "Intro", value: "INTRO" },
 ];
 
 // Each option slot (1-4) gets its own arcade-button color. Full literal class
@@ -160,12 +178,35 @@ export default function App() {
   // Screen-reader announcements for phase outcomes (aria-live region below).
   const [announce, setAnnounce] = useState("");
 
+  // Hub navigation. "home" (landing) is the default; "play" shows the entry
+  // (create/join) flow; "profile" shows local stats. Once in a room the game
+  // screens take over regardless of view.
+  const [view, setView] = useState("home");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [clipPref, setClipPref] = useState("RANDOM"); // preset by the Heardle card
+  const [stats, setStats] = useState(() => getStats());
+
+  // Count my correct answers across the game so the profile can track accuracy.
+  const myCorrectRef = useRef(0);
+  useEffect(() => {
+    if (phase === "LOBBY") myCorrectRef.current = 0;
+  }, [phase]);
+
+  // Route into the room flow from a Home game card.
+  const openGame = (game) => {
+    if (!game || game.status !== "play") return;
+    setClipPref(game.clip || "RANDOM");
+    setView("play");
+    setMenuOpen(false);
+  };
+
   // Reveal: play correct/wrong sting and announce my result.
   useEffect(() => {
     if (!reveal) return;
     const mine = (reveal.results || []).find((r) => r.id === myId);
     if (!mine) return;
     if (mine.correct) {
+      myCorrectRef.current += 1;
       sound.play("correct");
       setAnnounce(`Correct. Plus ${mine.pointsEarned} points.`);
     } else if (mine.answerTimeSeconds != null) {
@@ -176,7 +217,8 @@ export default function App() {
     }
   }, [reveal, myId]);
 
-  // Game over: fanfare for the winner, soft cue otherwise.
+  // Game over: fanfare for the winner, soft cue otherwise, and record my stats.
+  const recordedRef = useRef(null);
   useEffect(() => {
     if (!gameOver) return;
     const board = gameOver.leaderboard || [];
@@ -188,7 +230,23 @@ export default function App() {
       sound.play("lose");
       setAnnounce(idx >= 0 ? `Game over. You placed number ${idx + 1}.` : "Game over.");
     }
+    // Persist once per game over (and only if I actually played).
+    const sig = `${idx}:${board.length}:${gameOver.roundHistory?.length || 0}`;
+    if (idx >= 0 && recordedRef.current !== sig) {
+      recordedRef.current = sig;
+      const next = recordGame({
+        won: idx === 0,
+        score: board[idx]?.score || 0,
+        correct: myCorrectRef.current,
+        rounds: gameOver.roundHistory?.length || 0,
+      });
+      setStats(next);
+    }
   }, [gameOver, myId]);
+  // Allow the next game to record again.
+  useEffect(() => {
+    if (phase === "LOBBY") recordedRef.current = null;
+  }, [phase]);
 
   const handleGuess = (opt) => {
     sound.play("select");
@@ -215,14 +273,46 @@ export default function App() {
         {announce}
       </div>
 
+      {menuOpen && (
+        <SideMenu
+          games={GAMES}
+          onClose={() => setMenuOpen(false)}
+          onHome={() => {
+            setView("home");
+            setMenuOpen(false);
+          }}
+          onOpen={openGame}
+          onProfile={() => {
+            setView("profile");
+            setMenuOpen(false);
+          }}
+        />
+      )}
+
       <div className="mx-auto flex min-h-screen max-w-xl flex-col px-5 pt-6 pb-8">
-        <Masthead phase={phase} round={round} total={state?.totalRounds} />
+        <Masthead
+          phase={phase}
+          round={round}
+          total={state?.totalRounds}
+          onMenu={joined ? null : () => setMenuOpen(true)}
+          onBrand={joined ? null : () => setView("home")}
+        />
 
         <main className="flex flex-1 flex-col justify-start py-8">
           {!connected ? (
             <Centered eyebrow="Status" title="Connecting…" />
+          ) : !joined && view === "home" ? (
+            <Home games={GAMES} stats={stats} onOpen={openGame} onProfile={() => setView("profile")} />
+          ) : !joined && view === "profile" ? (
+            <Profile stats={stats} onBack={() => setView("home")} />
           ) : !joined ? (
-            <EntryScreen onCreate={handleCreate} onJoin={handleJoinRoom} onQuick={handleQuick} />
+            <EntryScreen
+              onCreate={handleCreate}
+              onJoin={handleJoinRoom}
+              onQuick={handleQuick}
+              onHome={() => setView("home")}
+              clipPref={clipPref}
+            />
           ) : phase === "LOBBY" ? (
             <Lobby
               players={players}
@@ -232,6 +322,7 @@ export default function App() {
               code={roomCode}
               messages={messages}
               onChat={sendChat}
+              clipPref={clipPref}
             />
           ) : phase === "ROUND_PLAYING" ? (
             <Playing
@@ -279,7 +370,7 @@ export default function App() {
 }
 
 // ---------- Masthead ----------
-function Masthead({ phase, round, total }) {
+function Masthead({ phase, round, total, onMenu, onBrand }) {
   const label =
     phase === "ROUND_PLAYING" || phase === "ROUND_REVEAL"
       ? `Track ${String(round).padStart(2, "0")} / ${String(total ?? 10).padStart(2, "0")}`
@@ -287,18 +378,296 @@ function Masthead({ phase, round, total }) {
       ? "Side B · Final"
       : "Side A · Lobby";
   return (
-    <header className="flex items-end justify-between border-b border-rule pb-4">
-      <h1 className="flex items-center font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
-        Snippet
-        <span className="ml-1.5 inline-block h-[0.7em] w-[0.32em] animate-blink bg-pink" aria-hidden="true" />
-      </h1>
+    <header className="flex items-center justify-between gap-3 border-b border-rule pb-4">
+      <div className="flex items-center gap-3">
+        {onMenu && (
+          <button
+            onClick={onMenu}
+            aria-label="Open menu"
+            className="font-console text-2xl leading-none text-dim transition-colors hover:text-amber"
+          >
+            ≡
+          </button>
+        )}
+        <h1 className="flex items-center font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
+          <button
+            onClick={onBrand || undefined}
+            disabled={!onBrand}
+            className="flex items-center disabled:cursor-default"
+          >
+            Snippet
+            <span className="ml-1.5 inline-block h-[0.7em] w-[0.32em] animate-blink bg-pink" aria-hidden="true" />
+          </button>
+        </h1>
+      </div>
       <span className={EYEBROW}>{label}</span>
     </header>
   );
 }
 
+// ---------- Home hub (landing) ----------
+function Home({ games, stats, onOpen, onProfile }) {
+  return (
+    <div className="animate-rise space-y-10">
+      <div className="space-y-3">
+        <p className="font-coin text-sm leading-relaxed text-pink">INSERT COIN</p>
+        <h2 className="font-marquee text-3xl font-black uppercase leading-[1.05] tracking-tight text-bone">
+          Guess the song.
+          <br />
+          Beat your friends.
+        </h2>
+        <p className="font-console text-sm text-dim">
+          Free real-time music games. Hear a snippet, name the track, score faster than everyone else.
+        </p>
+      </div>
+
+      <button
+        onClick={onProfile}
+        className={`${PANEL} flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:border-amber/60`}
+      >
+        <span className={EYEBROW}>Your profile</span>
+        <span className="font-console text-xs tabular-nums text-dim">
+          {stats.games} games · {stats.wins} wins · best {stats.bestScore}
+        </span>
+      </button>
+
+      <div>
+        <p className={EYEBROW}>Music games</p>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {games.map((g) => (
+            <GameCard key={g.key} game={g} onOpen={onOpen} />
+          ))}
+        </div>
+      </div>
+
+      <WhySnippet />
+      <Faq />
+      <SiteFooter />
+    </div>
+  );
+}
+
+function GameCard({ game, onOpen }) {
+  const playable = game.status === "play";
+  return (
+    <button
+      onClick={() => playable && onOpen(game)}
+      disabled={!playable}
+      className={`${PANEL} flex items-start gap-3 px-4 py-4 text-left transition-colors ${
+        playable ? "hover:border-pink" : "opacity-60"
+      }`}
+    >
+      <span className="grid h-9 w-9 shrink-0 place-items-center border border-rule bg-void font-marquee text-lg text-pink">
+        {game.glyph}
+      </span>
+      <span className="min-w-0">
+        <span className="flex items-center gap-2">
+          <span className="font-console text-sm uppercase tracking-wide text-bone">{game.title}</span>
+          {!playable && (
+            <span className="font-console text-[10px] uppercase tracking-[0.2em] text-amber">Soon</span>
+          )}
+        </span>
+        <span className="mt-1 block font-console text-xs text-dim">{game.sub}</span>
+        {playable && (
+          <span className="mt-2 inline-block font-console text-[11px] uppercase tracking-[0.2em] text-pink">
+            ▶ Play
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+function WhySnippet() {
+  const items = [
+    { t: "Massive library", d: "Real preview clips across every genre, re-sampled every round." },
+    { t: "Real-time multiplayer", d: "Private rooms, up to 8 players, scored by speed." },
+    { t: "Your way", d: "Pick rounds, timer, answers, era, and title-vs-artist mode." },
+    { t: "Completely free", d: "No downloads, no account needed. Just open and play." },
+  ];
+  return (
+    <div>
+      <p className={EYEBROW}>Why Snippet</p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {items.map((i) => (
+          <div key={i.t} className={`${PANEL} px-4 py-3`}>
+            <p className="font-console text-sm uppercase tracking-wide text-bone">{i.t}</p>
+            <p className="mt-1 font-console text-xs leading-relaxed text-dim">{i.d}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const FAQ_ITEMS = [
+  {
+    q: "What makes a good guess-the-song game?",
+    a: "A big music library, fair audio, and fast speed-scored rounds. Snippet adds private rooms, host settings, and reconnect so a dropped player keeps their score.",
+  },
+  {
+    q: "Can I play with friends online?",
+    a: "Yes. Create a private room and share the code or link, or hit Quick Play to match into a public lobby. Up to 8 players per room, plus spectators.",
+  },
+  {
+    q: "Can I focus on a genre or era?",
+    a: "The host picks a genre (hip-hop, R&B, rap, drill, trap) and a decade filter — all the way back to the 90s — before starting.",
+  },
+  {
+    q: "Do I need to download anything?",
+    a: "No. It runs in the browser and installs as a PWA if you want an app icon. No account required — sign in with Google only if you want a verified name and avatar.",
+  },
+];
+
+function Faq() {
+  const [open, setOpen] = useState(-1);
+  return (
+    <div>
+      <p className={EYEBROW}>Popular questions</p>
+      <div className="mt-3 space-y-2">
+        {FAQ_ITEMS.map((f, i) => {
+          const isOpen = open === i;
+          return (
+            <div key={i} className={PANEL}>
+              <button
+                onClick={() => setOpen(isOpen ? -1 : i)}
+                aria-expanded={isOpen}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+              >
+                <span className="font-console text-xs uppercase tracking-wide text-bone">{f.q}</span>
+                <span className="shrink-0 font-console text-amber">{isOpen ? "−" : "+"}</span>
+              </button>
+              {isOpen && (
+                <p className="border-t border-rule px-4 py-3 font-console text-xs leading-relaxed text-dim">{f.a}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SiteFooter() {
+  return (
+    <footer className="border-t border-rule pt-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="font-marquee text-lg font-black uppercase tracking-tight text-bone">Snippet</span>
+        <span className={EYEBROW}>Free music guessing games</span>
+      </div>
+      <p className="mt-3 font-console text-xs leading-relaxed text-dim">
+        Preview clips via the iTunes Search API. Made for fun — not affiliated with Apple.
+      </p>
+    </footer>
+  );
+}
+
+// ---------- My profile (local stats) ----------
+function Profile({ stats, onBack }) {
+  const acc = stats.rounds > 0 ? Math.round((stats.correct / stats.rounds) * 100) : 0;
+  const winRate = stats.games > 0 ? Math.round((stats.wins / stats.games) * 100) : 0;
+  const rows = [
+    { k: "Games played", v: stats.games },
+    { k: "Wins", v: `${stats.wins} · ${winRate}%` },
+    { k: "Best score", v: stats.bestScore },
+    { k: "Correct", v: `${stats.correct} / ${stats.rounds} · ${acc}%` },
+  ];
+  return (
+    <div className="animate-rise space-y-6">
+      <button onClick={onBack} className={`${EYEBROW} hover:text-amber`}>
+        ‹ Home
+      </button>
+      <div>
+        <p className="font-coin text-sm text-pink">MY PROFILE</p>
+        <p className="mt-2 font-console text-sm text-dim">Your stats on this device — play more to fill them in.</p>
+      </div>
+      <ul className={`${PANEL} divide-y divide-rule`}>
+        {rows.map((r) => (
+          <li key={r.k} className="flex items-center justify-between px-4 py-3">
+            <span className="font-console text-xs uppercase tracking-wide text-dim">{r.k}</span>
+            <span className="font-console text-sm tabular-nums text-bone">{r.v}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ---------- Slide-in side menu ----------
+function LanguageSelect() {
+  const [lang, setLang] = useState("EN");
+  return (
+    <select
+      value={lang}
+      onChange={(e) => setLang(e.target.value)}
+      aria-label="Game language"
+      className="mt-2 w-full border border-rule bg-void px-3 py-2 font-console text-sm text-bone focus:border-pink focus:outline-none"
+    >
+      <option value="EN">English</option>
+      <option value="SOON" disabled>
+        More languages soon…
+      </option>
+    </select>
+  );
+}
+
+function SideMenu({ games, onClose, onHome, onOpen, onProfile }) {
+  const playable = games.filter((g) => g.status === "play");
+  return (
+    <div className="fixed inset-0 z-[70] flex">
+      <nav className="animate-rise w-72 max-w-[80vw] overflow-y-auto border-r border-rule bg-cabinet px-5 py-6">
+        <div className="flex items-center justify-between">
+          <span className="font-marquee text-xl font-black uppercase tracking-tight text-bone">Snippet</span>
+          <button onClick={onClose} aria-label="Close menu" className="font-console text-xl text-dim hover:text-pink">
+            ✕
+          </button>
+        </div>
+
+        <p className={`${EYEBROW} mt-8`}>Play</p>
+        <ul className="mt-3 space-y-1">
+          {playable.map((g) => (
+            <li key={g.key}>
+              <button
+                onClick={() => onOpen(g)}
+                className="flex w-full items-center gap-3 px-1 py-2 text-left font-console text-sm text-bone transition-colors hover:text-pink"
+              >
+                <span className="w-5 text-center text-pink">{g.glyph}</span>
+                {g.title}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <p className={`${EYEBROW} mt-8`}>You</p>
+        <ul className="mt-3 space-y-1">
+          <li>
+            <button onClick={onHome} className="px-1 py-2 font-console text-sm text-bone transition-colors hover:text-pink">
+              All games
+            </button>
+          </li>
+          <li>
+            <button onClick={onProfile} className="px-1 py-2 font-console text-sm text-bone transition-colors hover:text-pink">
+              My profile
+            </button>
+          </li>
+        </ul>
+
+        <div className="mt-8">
+          <p className={EYEBROW}>Game language</p>
+          <LanguageSelect />
+        </div>
+
+        <p className="mt-8 font-console text-xs leading-relaxed text-dim">
+          Share the game with friends for even more fun.
+        </p>
+      </nav>
+      <button aria-label="Close menu" onClick={onClose} className="flex-1 bg-void/70 backdrop-blur-sm" />
+    </div>
+  );
+}
+
 // ---------- Entry: sign in (Google or guest), create or join a room ----------
-function EntryScreen({ onCreate, onJoin, onQuick }) {
+function EntryScreen({ onCreate, onJoin, onQuick, onHome }) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
   const [name, setName] = useState("");
   const [code, setCode] = useState(() => {
@@ -314,6 +683,11 @@ function EntryScreen({ onCreate, onJoin, onQuick }) {
 
   return (
     <div className="mx-auto w-full max-w-sm animate-rise space-y-6">
+      {onHome && (
+        <button onClick={onHome} className={`${EYEBROW} hover:text-amber`}>
+          ‹ Home
+        </button>
+      )}
       <div>
         <p className="font-coin text-base leading-relaxed text-pink">INSERT COIN</p>
         <div className="mt-3 h-px w-24 bg-rule" />
@@ -435,16 +809,18 @@ function GoogleSignIn({ clientId, onSignIn }) {
 }
 
 // ---------- Lobby ----------
-function Lobby({ players, myId, isHost, onStart, code, messages, onChat }) {
+function Lobby({ players, myId, isHost, onStart, code, messages, onChat, clipPref }) {
   const [copied, setCopied] = useState(false);
   const [genre, setGenre] = useState("HIP-HOP");
-  // Match settings (host only). Defaults mirror the server's DEFAULT_SETTINGS.
+  // Match settings (host only). Defaults mirror the server's DEFAULT_SETTINGS;
+  // `clip` is seeded from the Home card the host arrived through (Heardle=INTRO).
   const [settings, setSettings] = useState({
     rounds: 10,
     roundMs: 10000,
     optionsCount: 4,
     mode: "TITLE",
     decade: "all",
+    clip: clipPref === "INTRO" ? "INTRO" : "RANDOM",
   });
   const setField = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }));
   const handleStart = () => onStart({ ...settings, genre: genre.toLowerCase() });
@@ -525,6 +901,7 @@ function Lobby({ players, myId, isHost, onStart, code, messages, onChat }) {
           </div>
 
           <SettingRow label="Mode" options={MODE_OPTS} value={settings.mode} onChange={setField("mode")} />
+          <SettingRow label="Clip" options={CLIP_OPTS} value={settings.clip} onChange={setField("clip")} />
           <SettingRow label="Rounds" options={ROUND_OPTS} value={settings.rounds} onChange={setField("rounds")} />
           <SettingRow label="Timer" options={TIMER_OPTS} value={settings.roundMs} onChange={setField("roundMs")} />
           <SettingRow label="Answers" options={OPTION_OPTS} value={settings.optionsCount} onChange={setField("optionsCount")} />
@@ -596,8 +973,12 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, spectator, onGuess, on
 
     const start = () => {
       try {
-        const maxOffset = Math.max(0, el.duration - 10);
-        el.currentTime = Math.random() * Math.min(15, maxOffset);
+        if (state.clip === "INTRO") {
+          el.currentTime = 0; // Heardle-style: play from the very start
+        } else {
+          const maxOffset = Math.max(0, el.duration - 10);
+          el.currentTime = Math.random() * Math.min(15, maxOffset);
+        }
       } catch {
         /* not seekable yet; the loadedmetadata handler will run start() */
       }
@@ -659,7 +1040,10 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, spectator, onGuess, on
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <span className={EYEBROW}>{isArtist ? "Name the artist" : "Name the track"}</span>
+        <span className={EYEBROW}>
+          {isArtist ? "Name the artist" : "Name the track"}
+          {state.clip === "INTRO" ? " · intro" : ""}
+        </span>
         <span className="font-console text-xs uppercase tracking-[0.18em] text-dim">
           QV <span className="text-amber">{questionValue}</span> · Speed ≤{maxSpeedBonus}
         </span>
