@@ -348,28 +348,35 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
       <div className="grid gap-3">
         {state.options.map((opt) => {
           const selected = myGuess === opt;
+          const dimmed = hasGuessed && !selected; // Feature 4: lock animation
           return (
-            <button
-              key={opt}
-              onClick={() => onGuess(opt)}
-              disabled={hasGuessed}
-              className={[
-                "w-full border px-5 py-4 text-left font-mono text-sm uppercase tracking-wide transition-colors",
-                selected
-                  ? "border-zinc-100 bg-zinc-900 text-zinc-100"
-                  : "border-zinc-700 bg-zinc-800 text-white enabled:hover:bg-white enabled:hover:text-zinc-900",
-                "disabled:cursor-not-allowed disabled:opacity-50",
-              ].join(" ")}
-            >
-              {opt}
-            </button>
+            <div key={opt}>
+              <button
+                onClick={() => onGuess(opt)}
+                disabled={hasGuessed}
+                className={[
+                  "w-full border px-5 py-4 text-left font-mono text-sm uppercase tracking-wide transition-all",
+                  selected
+                    ? "border-zinc-100 bg-zinc-900 text-zinc-100"
+                    : "border-zinc-700 bg-zinc-800 text-white enabled:hover:bg-white enabled:hover:text-zinc-900",
+                  hasGuessed && selected ? "ring-2 ring-white" : "",
+                  dimmed ? "pointer-events-none opacity-30" : "",
+                  "disabled:cursor-not-allowed",
+                ].join(" ")}
+              >
+                {opt}
+              </button>
+              {hasGuessed && selected && (
+                <p className="mt-1 font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">Locked in</p>
+              )}
+            </div>
           );
         })}
       </div>
 
-      <p className={`${EYEBROW} text-center`}>
-        {hasGuessed ? "Locked in — hold tight." : "Pick the track. Faster = more points."}
-      </p>
+      {!hasGuessed && (
+        <p className={`${EYEBROW} text-center`}>Pick the track. Faster = more points.</p>
+      )}
     </div>
   );
 }
