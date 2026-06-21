@@ -136,9 +136,13 @@ function JoinScreen({ onJoin }) {
         maxLength={20}
         placeholder="YOUR HANDLE"
         aria-label="Your handle"
-        className="mt-6 w-full border border-zinc-700 bg-transparent px-4 py-4 font-mono text-lg uppercase tracking-widest placeholder:text-zinc-700 focus:border-zinc-100 focus:outline-none"
+        className="mt-8 w-full rounded-none border-0 border-b-2 border-zinc-500 bg-transparent px-1 py-3 font-mono text-lg uppercase tracking-widest placeholder:text-zinc-600 focus:border-white focus:outline-none"
       />
-      <button type="submit" disabled={!name.trim()} className={`${BTN} mt-4 w-full`}>
+      <button
+        type="submit"
+        disabled={!name.trim()}
+        className="mt-6 w-full bg-white px-5 py-4 font-mono text-sm uppercase tracking-[0.2em] text-black transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
+      >
         Enter
       </button>
     </form>
@@ -159,20 +163,25 @@ function Lobby({ players, myId, isHost, onStart }) {
     }
   };
 
+  const shortUrl = url.length > 40 ? url.slice(0, 39) + "…" : url;
+
   return (
     <div className="space-y-8">
       <div>
-        <p className={EYEBROW}>In the room · {players.length}/8</p>
+        <p className={EYEBROW}>{players.length} / 8 players</p>
         <ul className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
           {players.map((p, i) => (
-            <li key={p.id} className="flex items-center justify-between px-4 py-3">
+            <li
+              key={p.id}
+              className={`flex items-center justify-between px-4 py-3 ${i % 2 === 0 ? "bg-zinc-900" : "bg-zinc-800"}`}
+            >
               <span className="flex items-center gap-3">
                 <span className="font-mono text-xs text-zinc-600">{String(i + 1).padStart(2, "0")}</span>
                 <span className="font-mono uppercase tracking-wide">{p.name}</span>
               </span>
-              <span className="flex gap-2">
-                {p.id === myId && <Tag>You</Tag>}
-                {i === 0 && <Tag>Host</Tag>}
+              <span className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.2em]">
+                {p.id === myId && <span className="text-zinc-400">You</span>}
+                {i === 0 && <span className="text-amber-400">[Host]</span>}
               </span>
             </li>
           ))}
@@ -184,7 +193,8 @@ function Lobby({ players, myId, isHost, onStart }) {
         <div className="mt-3 flex gap-2">
           <input
             readOnly
-            value={url}
+            value={shortUrl}
+            title={url}
             onFocus={(e) => e.target.select()}
             aria-label="Room URL"
             className="min-w-0 flex-1 border border-zinc-800 bg-zinc-950 px-3 py-3 font-mono text-xs text-zinc-400 focus:outline-none"
@@ -340,33 +350,41 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess }) {
 function Reveal({ reveal, myId }) {
   const results = reveal?.results ?? [];
   const winner = reveal?.roundWinner ?? null; // fastest correct answer, or null
+  const round = reveal?.round ?? 0;
   const leaderboard =
     reveal?.leaderboard ??
     [...results].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
   // roundWinner carries name + time; pull their points from the results list.
-  const winnerPoints = winner
-    ? results.find((r) => r.name === winner.name)?.pointsEarned ?? 0
-    : 0;
+  const winnerResult = winner ? results.find((r) => r.name === winner.name) : null;
+  const winnerPoints = winnerResult?.pointsEarned ?? 0;
+  const winnerStreak = winnerResult?.streakBonus ?? 0;
 
   return (
-    <div className="space-y-8">
-      {/* TOP CARD: fastest correct answer this round, or nobody got it */}
+    <div className="space-y-6">
+      <p className={EYEBROW}>Round {String(round).padStart(2, "0")} / 10</p>
+
+      {/* Winner card: left green accent, big points */}
       {winner ? (
-        <div className={`${PANEL} border-emerald-500/40 bg-emerald-400/5 px-5 py-6 text-center`}>
-          <p className={`${EYEBROW} text-emerald-400`}>Fastest this round</p>
-          <p className="mt-2 text-3xl font-black uppercase tracking-tighter text-zinc-100">
-            {winner.name}
-          </p>
-          <div className="mt-3 flex items-center justify-center gap-6 font-mono text-sm tabular-nums">
-            <span className="text-zinc-400">{winner.answerTimeSeconds}s</span>
-            <span className="text-emerald-300">+{winnerPoints}</span>
+        <div className="border border-zinc-600 border-l-4 border-l-green-400 bg-zinc-950 px-5 py-5">
+          <p className={`${EYEBROW} text-green-400`}>Fastest this round</p>
+          <div className="mt-3 flex items-end justify-between gap-4">
+            <div className="min-w-0">
+              <p className="truncate text-2xl font-black uppercase tracking-tighter text-zinc-100">
+                {winner.name}
+              </p>
+              <p className="mt-1 font-mono text-xs tabular-nums text-zinc-500">{winner.answerTimeSeconds}s</p>
+            </div>
+            <p className="shrink-0 font-mono text-3xl font-bold tabular-nums text-green-400">+{winnerPoints}</p>
           </div>
+          {winnerStreak > 0 && (
+            <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.2em] text-amber-400">
+              🔥 streak +{winnerStreak}
+            </p>
+          )}
         </div>
       ) : (
-        <div className={`${PANEL} px-5 py-6 text-center`}>
-          <p className="text-2xl font-black uppercase tracking-tighter text-zinc-500">
-            No one got it
-          </p>
+        <div className="border border-zinc-700 bg-zinc-950 px-5 py-6 text-center">
+          <p className="text-2xl font-black uppercase tracking-tighter text-zinc-500">No one got it</p>
         </div>
       )}
 
@@ -385,12 +403,15 @@ function Reveal({ reveal, myId }) {
                 <span className="flex min-w-0 items-center gap-3">
                   <StatusDot correct={r.correct} answered={answered} />
                   <span className="truncate font-mono uppercase tracking-wide">{r.name}</span>
+                  {r.streakBonus > 0 && (
+                    <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-amber-400">
+                      🔥{r.currentStreak}
+                    </span>
+                  )}
                 </span>
                 <span className="flex items-center gap-4 font-mono text-sm tabular-nums">
                   <span className="text-zinc-500">{answered ? `${r.answerTimeSeconds}s` : "—"}</span>
-                  <span className={r.correct ? "text-emerald-300" : "text-zinc-600"}>
-                    +{r.pointsEarned}
-                  </span>
+                  <span className={r.correct ? "text-green-400" : "text-zinc-600"}>+{r.pointsEarned}</span>
                 </span>
               </li>
             );
@@ -406,7 +427,7 @@ function Reveal({ reveal, myId }) {
 
 // Correct / wrong / no-answer marker for the reveal list.
 function StatusDot({ correct, answered }) {
-  const cls = !answered ? "text-zinc-700" : correct ? "text-emerald-400" : "text-rose-500";
+  const cls = !answered ? "text-zinc-700" : correct ? "text-green-400" : "text-red-500";
   const mark = !answered ? "○" : correct ? "✓" : "✗";
   return (
     <span className={`w-4 text-center font-mono text-sm ${cls}`} aria-hidden="true">
@@ -422,24 +443,77 @@ function GameOver({ gameOver, players, onRestart }) {
     gameOver?.leaderboard ??
     [...players].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
   const champ = rows[0];
+  const rest = rows.slice(1);
+  const history = gameOver?.roundHistory ?? null;
 
   return (
-    <div className="space-y-8 text-center">
-      <div>
-        <p className={EYEBROW}>That's a wrap</p>
-        {champ && (
-          <h2 className="mt-3 text-5xl font-black uppercase leading-none tracking-tighter">
-            {champ.name}
-          </h2>
-        )}
-        <p className="mt-2 font-mono text-sm text-zinc-500">takes the crown.</p>
-      </div>
+    <div className="space-y-8">
+      <p className={`${EYEBROW} text-center`}>That's a wrap</p>
 
-      <Leaderboard rows={rows} title="Final" />
+      {/* Champion card */}
+      {champ && (
+        <div className="border border-zinc-500 bg-zinc-950 px-6 py-6 text-center">
+          <p className={`${EYEBROW} text-amber-400`}>Champion</p>
+          <p className="mt-2 text-2xl font-black uppercase tracking-tighter text-zinc-100">{champ.name}</p>
+          <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-white">{champ.score}</p>
+        </div>
+      )}
 
-      <button onClick={onRestart} className={`${BTN} w-full py-5 text-base`}>
+      {rest.length > 0 && (
+        <div>
+          <p className={EYEBROW}>Final scores</p>
+          <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+            {rest.map((r, i) => (
+              <li key={r.id ?? r.name ?? i} className="flex items-center justify-between px-4 py-2.5">
+                <span className="flex items-center gap-3">
+                  <span className="w-6 font-mono text-xs text-zinc-600">{String(r.rank ?? i + 2).padStart(2, "0")}</span>
+                  <span className="font-mono text-sm uppercase tracking-wide text-zinc-400">{r.name}</span>
+                </span>
+                <span className="font-mono text-sm tabular-nums text-zinc-400">{r.score}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {history && history.length > 0 && <RoundHistory history={history} />}
+
+      <button
+        onClick={onRestart}
+        className="w-full bg-white px-5 py-4 font-mono text-base uppercase tracking-[0.2em] text-black transition-colors hover:bg-zinc-200"
+      >
         ↻ Play again
       </button>
+    </div>
+  );
+}
+
+// Collapsible per-round recap shown on game over (Feature 6).
+function RoundHistory({ history }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`${EYEBROW} flex w-full items-center gap-2 text-left hover:text-zinc-300`}
+      >
+        <span>{open ? "▼" : "▶"}</span> See all rounds
+      </button>
+      {open && (
+        <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
+          {history.map((h, i) => (
+            <li key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 font-mono text-xs">
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="w-6 text-zinc-600">{String(i + 1).padStart(2, "0")}</span>
+                <span className="truncate text-zinc-600">
+                  <span className="text-zinc-400">{h.artistName}</span> — {h.trackName}
+                </span>
+              </span>
+              <span className="shrink-0 uppercase tracking-wide text-zinc-200">{h.winner || "No one"}</span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
@@ -452,6 +526,7 @@ function Leaderboard({ rows, myId, title }) {
       <ol className={`mt-3 ${PANEL} divide-y divide-zinc-900`}>
         {rows.map((r, i) => {
           const isMe = myId && r.id === myId;
+          const top = i === 0;
           return (
             <li
               key={r.id ?? r.name ?? i}
@@ -459,9 +534,9 @@ function Leaderboard({ rows, myId, title }) {
             >
               <span className="flex items-center gap-3">
                 <span className="w-6 font-mono text-xs text-zinc-600">{String(r.rank ?? i + 1).padStart(2, "0")}</span>
-                <span className="font-mono uppercase tracking-wide">{r.name}</span>
+                <span className={`font-mono uppercase tracking-wide ${top ? "text-white" : "text-zinc-400"}`}>{r.name}</span>
               </span>
-              <span className="font-mono tabular-nums text-zinc-200">{r.score}</span>
+              <span className={`font-mono tabular-nums ${top ? "text-white" : "text-zinc-400"}`}>{r.score}</span>
             </li>
           );
         })}
@@ -473,6 +548,7 @@ function Leaderboard({ rows, myId, title }) {
 function TimeCounter({ seconds }) {
   const total = 10; // server round length; bar is display-only
   const pct = Math.max(0, Math.min(100, (seconds / total) * 100));
+  const low = seconds <= 3; // the only place red appears outside reveal
   const mm = Math.floor(seconds / 60);
   const ss = String(seconds % 60).padStart(2, "0");
   return (
@@ -481,7 +557,7 @@ function TimeCounter({ seconds }) {
         <span className={EYEBROW}>Time</span>
         <span
           className={`font-mono text-6xl font-bold tabular-nums leading-none ${
-            seconds <= 3 ? "text-rose-400" : "text-zinc-100"
+            low ? "text-red-400" : "text-zinc-100"
           }`}
         >
           {mm}:{ss}
@@ -489,8 +565,8 @@ function TimeCounter({ seconds }) {
       </div>
       <div className="mt-3 h-1 w-full bg-zinc-900">
         <div
-          className={`h-full ${seconds <= 3 ? "bg-rose-500" : "bg-zinc-100"}`}
-          style={{ width: `${pct}%`, transition: "width 250ms linear" }}
+          className={`h-full transition-all duration-1000 ease-linear ${low ? "bg-red-500" : "bg-zinc-100"}`}
+          style={{ width: `${pct}%` }}
         />
       </div>
     </div>
