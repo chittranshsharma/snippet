@@ -175,8 +175,9 @@ function Masthead({ phase, round, total }) {
       : "Side A · Lobby";
   return (
     <header className="flex items-end justify-between border-b border-rule pb-4">
-      <h1 className="font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
-        Name<span className="text-pink">·</span>That<span className="text-pink">·</span>Track
+      <h1 className="flex items-center font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
+        Snippet
+        <span className="ml-1.5 inline-block h-[0.7em] w-[0.32em] animate-blink bg-pink" aria-hidden="true" />
       </h1>
       <span className={EYEBROW}>{label}</span>
     </header>
@@ -470,7 +471,7 @@ function Reveal({ reveal, myId }) {
 
       {/* Winner card: HIGH SCORE, amber left accent, big points */}
       {winner ? (
-        <div className="border border-rule border-l-4 border-l-amber bg-cabinet px-5 py-5">
+        <div className="border border-amber/40 border-l-4 border-l-amber bg-amber/5 px-5 py-5 shadow-[0_0_30px_-10px_#FFC93C]">
           <p className="font-coin text-xs text-amber">HIGH SCORE</p>
           <div className="mt-3 flex items-end justify-between gap-4">
             <div className="min-w-0">
@@ -490,8 +491,8 @@ function Reveal({ reveal, myId }) {
           )}
         </div>
       ) : (
-        <div className="border border-rule bg-cabinet px-5 py-6 text-center">
-          <p className="font-marquee text-2xl font-black uppercase tracking-tight text-dim">No one got it</p>
+        <div className="border border-bad/50 bg-bad/5 px-5 py-6 text-center shadow-[0_0_30px_-10px_#FF4D6D]">
+          <p className="font-marquee text-2xl font-black uppercase tracking-tight text-bad">No one got it</p>
         </div>
       )}
 
@@ -505,7 +506,9 @@ function Reveal({ reveal, myId }) {
             return (
               <li
                 key={r.id ?? r.name}
-                className={`flex items-center justify-between gap-3 px-4 py-3 ${isMe ? "bg-void/40" : ""}`}
+                className={`flex items-center justify-between gap-3 px-4 py-3 ${
+                  r.correct ? "bg-good/5" : isMe ? "bg-pink/5" : ""
+                }`}
               >
                 <span className="flex min-w-0 items-center gap-3">
                   <StatusDot correct={r.correct} answered={answered} />
@@ -558,7 +561,7 @@ function GameOver({ gameOver, players, onRestart }) {
       </p>
 
       {champ && (
-        <div className="border border-amber bg-cabinet px-6 py-6 text-center">
+        <div className="border border-amber/50 bg-amber/5 px-6 py-6 text-center shadow-[0_0_36px_-12px_#FFC93C]">
           <p className="font-coin text-xs text-amber">1UP · Champion</p>
           <p className="mt-3 font-console uppercase tracking-wide text-bone">{champ.name}</p>
           <p className="mt-1 animate-scoreroll font-marquee text-4xl font-black tabular-nums text-amber">
@@ -635,7 +638,7 @@ function Leaderboard({ rows, myId, title }) {
           return (
             <li
               key={r.id ?? r.name ?? i}
-              className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-void/40" : ""}`}
+              className={`flex items-center justify-between px-4 py-3 ${isMe ? "bg-pink/5" : ""}`}
             >
               <span className="flex items-center gap-3">
                 <span className={`w-6 font-console text-xs ${top ? "text-amber" : "text-dim"}`}>

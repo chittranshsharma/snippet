@@ -1,4 +1,4 @@
-# Name·That·Track — multiplayer music guessing game
+# Snippet — multiplayer music guessing game
 
 A real-time, server-authoritative music guessing game. Listen to a short song
 snippet, pick the right track from four options — faster answers score more.
