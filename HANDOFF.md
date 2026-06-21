@@ -56,12 +56,26 @@ Five feature waves shipped after it (commits `Wave A`…`Wave E`). The hard rule
   `storage.js` (Postgres global leaderboard, `GET /leaderboard`, needs
   `DATABASE_URL`+`pg`), Redis adapter (`REDIS_URL`), Sentry (`SENTRY_DSN`), all
   dormant unless configured (see DEPLOY.md).
+- **Wave F — music-games hub.** A SongTrivia-style landing rendered in Snippet's
+  own dark-arcade design: **Home** (hero, game-card grid, "Why Snippet", FAQ
+  accordion, footer), a slide-in **SideMenu** (hamburger), a **My Profile** view
+  backed by `client/src/stats.js` (localStorage: games/wins/best/accuracy,
+  recorded on game over), and an EN language selector. Top-level `view` router
+  (home/play/profile) in `App.jsx`. Playable cards: Music Quiz, Heardle, Create;
+  Harmonies/Wordzic/Lyricles/Crosszic are "Soon" placeholders (need
+  lyrics/crossword/connections data Snippet doesn't have — candidates for a
+  dedicated build).
+- **Wave G — Heardle / intro mode.** New `clip` setting (`RANDOM | INTRO`,
+  validated in `sanitizeSettings`, exposed as `state.clip`). INTRO plays each
+  clip from 0:00 (Heardle-style) instead of a random offset. Lobby gets a "Clip"
+  control; the Heardle Home card preselects INTRO.
 
 **New client→server events:** `chat`, `react`, `quickPlay`, `rejoin` (+ a
 `public` flag on `createRoom`). **New server→client:** `chat`, `reaction`,
 `rejoinFailed` (+ `held` on `playerLeft`, `token`/`spectator` on `roomJoined`).
 **New modules:** `gameLogic.js`, `profanity.js`, `log.js`, `storage.js`,
-`client/src/sound.js`. Scratch smoke tests `_wave{A,B,C}.mjs` are gitignored
+`client/src/sound.js`, `client/src/stats.js`. Settings now include `mode`,
+`decade`, and `clip`. Scratch smoke tests `_wave{A,B,C}.mjs` are gitignored
 (`_*.mjs`); the formal tests live in `test/`.
 
 ---
