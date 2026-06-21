@@ -17,14 +17,51 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN
   ? process.env.CLIENT_ORIGIN.split(",").map((s) => s.trim())
   : "*";
 const MAX_PLAYERS = 8;
-const TOTAL_ROUNDS = 10;
-const ROUND_MS = 10000; // round length, server-side only
 const REVEAL_MS = 3000; // pause on the reveal screen before next round
 const EARLY_END_GRACE_MS = 3000; // keep the clip playing this long after everyone answers
 const QUESTION_BASE = 300;
 const QUESTION_STEP = 250;
 const MAX_SPEED_BONUS = 350;
 const ALLOWED_GENRES = ["hip-hop", "r&b", "rap", "drill", "trap"];
+
+// ----- Host-configurable match settings (validated server-side) -----
+// Each is an allowlist; anything off-list snaps back to the default (first item
+// is the default). The client only *requests* settings — the server decides.
+const ROUND_CHOICES = [10, 5, 15]; // total rounds
+const TIMER_CHOICES = [10000, 7500, 15000]; // round length in ms
+const OPTION_CHOICES = [4, 3, 6]; // answers shown per round
+const MODE_CHOICES = ["TITLE", "ARTIST"]; // guess the song title or the artist
+const DECADE_CHOICES = ["all", "2020s", "2010s", "2000s", "1990s"];
+
+const DEFAULT_SETTINGS = {
+  rounds: ROUND_CHOICES[0],
+  roundMs: TIMER_CHOICES[0],
+  optionsCount: OPTION_CHOICES[0],
+  mode: MODE_CHOICES[0],
+  decade: DECADE_CHOICES[0],
+  genre: "hip-hop",
+};
+
+// Coerce an untrusted settings payload into a safe, fully-populated object.
+function sanitizeSettings(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const pick = (val, choices) => (choices.includes(val) ? val : choices[0]);
+  const genre = String(p.genre ?? "").toLowerCase();
+  return {
+    rounds: pick(Number(p.rounds), ROUND_CHOICES),
+    roundMs: pick(Number(p.roundMs), TIMER_CHOICES),
+    optionsCount: pick(Number(p.optionsCount), OPTION_CHOICES),
+    mode: pick(String(p.mode || "").toUpperCase(), MODE_CHOICES),
+    decade: pick(String(p.decade || "").toLowerCase(), DECADE_CHOICES),
+    genre: ALLOWED_GENRES.includes(genre) ? genre : DEFAULT_SETTINGS.genre,
+  };
+}
+
+// Pool size needed for a match: enough distinct tracks for every round plus a
+// full set of distractors, with headroom. Bounded so we never hammer the API.
+function poolSizeFor(settings) {
+  return Math.min(60, Math.max(16, settings.rounds + settings.optionsCount + 6));
+}
 
 // Google OAuth (optional). If GOOGLE_CLIENT_ID is unset, sign-in is disabled and
 // everyone plays as a guest.
@@ -62,12 +99,13 @@ function makeRoom(code) {
     usedTrackIds: new Set(),
     audioUrl: null,
     options: [],
-    correct: null, // SERVER-ONLY
+    correct: null, // SERVER-ONLY — the gradable answer (title or artist)
     roundStartedAt: 0,
     guesses: new Map(), // socketId -> { option, elapsedMs }
-    genre: "hip-hop",
+    settings: { ...DEFAULT_SETTINGS }, // host-chosen, validated at startGame
     pending: null, // next round's data, held during the countdown
     correctArtist: null,
+    correctTrackName: null,
     history: [], // { trackName, artistName, winner }
     players: new Map(), // socketId -> player
     timers: { round: null, reveal: null, countdown: null },
@@ -140,40 +178,51 @@ function shuffle(list) {
   return out;
 }
 
-// Build one round: a correct track + 3 different-artist distractors.
-function buildRound(pool, usedTrackIds) {
+// Build one round: a correct track + (optionsCount - 1) distractors. In TITLE
+// mode the options are track names; in ARTIST mode they are artist names. Every
+// option is a distinct value AND (where the pool allows) a distinct artist, so
+// the answer is never trivially duplicated.
+function buildRound(pool, usedTrackIds, settings) {
+  const optionsCount = settings.optionsCount;
+  const need = optionsCount - 1;
+  const valueOf = settings.mode === "ARTIST" ? (t) => t.artistName : (t) => t.trackName;
+
   const unused = pool.filter((t) => !usedTrackIds.has(t.trackId));
   const candidates = unused.length > 0 ? unused : pool;
   const correct = candidates[Math.floor(Math.random() * candidates.length)];
+  const correctValue = valueOf(correct);
 
-  const usedNames = new Set([correct.trackName]);
+  const usedValues = new Set([correctValue]);
   const usedArtists = new Set([correct.artistName]);
   const distractors = [];
   const others = shuffle(pool.filter((t) => t.trackId !== correct.trackId));
 
+  // First pass: distinct artist and distinct displayed value.
   for (const t of others) {
-    if (distractors.length === 3) break;
+    if (distractors.length === need) break;
     if (usedArtists.has(t.artistName)) continue;
-    if (usedNames.has(t.trackName)) continue;
+    if (usedValues.has(valueOf(t))) continue;
     distractors.push(t);
     usedArtists.add(t.artistName);
-    usedNames.add(t.trackName);
+    usedValues.add(valueOf(t));
   }
-  if (distractors.length < 3) {
+  // Fallback: relax the distinct-artist rule, keep distinct displayed values.
+  if (distractors.length < need) {
     for (const t of others) {
-      if (distractors.length === 3) break;
-      if (usedNames.has(t.trackName)) continue;
+      if (distractors.length === need) break;
+      if (usedValues.has(valueOf(t))) continue;
       distractors.push(t);
-      usedNames.add(t.trackName);
+      usedValues.add(valueOf(t));
     }
   }
 
-  const options = shuffle([correct.trackName, ...distractors.map((t) => t.trackName)]);
+  const options = shuffle([correctValue, ...distractors.map(valueOf)]);
   return {
     audioUrl: correct.previewUrl,
     options,
-    correct: correct.trackName,
+    correct: correctValue, // the gradable answer for this mode
     artistName: correct.artistName,
+    trackName: correct.trackName,
     trackId: correct.trackId,
   };
 }
@@ -181,8 +230,8 @@ function buildRound(pool, usedTrackIds) {
 function questionValueFor(roundIndex) {
   return QUESTION_BASE + roundIndex * QUESTION_STEP;
 }
-function speedBonusFor(elapsedMs) {
-  const ratio = Math.max(0, Math.min(1, (ROUND_MS - elapsedMs) / ROUND_MS));
+function speedBonusFor(elapsedMs, roundMs) {
+  const ratio = Math.max(0, Math.min(1, (roundMs - elapsedMs) / roundMs));
   return Math.round(MAX_SPEED_BONUS * ratio);
 }
 function streakBonusFor(streak) {
@@ -208,12 +257,16 @@ function publicState(room) {
     code: room.code,
     phase: room.phase,
     round: room.round,
-    totalRounds: TOTAL_ROUNDS,
+    totalRounds: room.settings.rounds,
+    roundMs: room.settings.roundMs, // round length, so the client bar matches
+    mode: room.settings.mode, // TITLE | ARTIST — for client labels only
     maxPlayers: MAX_PLAYERS,
     audioUrl: inRound ? room.audioUrl : null,
     options: inRound ? room.options : null,
     timeRemainingMs:
-      room.phase === PHASE.ROUND_PLAYING ? Math.max(0, ROUND_MS - (Date.now() - room.roundStartedAt)) : null,
+      room.phase === PHASE.ROUND_PLAYING
+        ? Math.max(0, room.settings.roundMs - (Date.now() - room.roundStartedAt))
+        : null,
     players: [...room.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
@@ -249,7 +302,10 @@ function resetToLobby(room) {
   room.guesses = new Map();
   room.pending = null;
   room.correctArtist = null;
+  room.correctTrackName = null;
   room.history = [];
+  // room.settings is intentionally preserved so "play again" keeps the host's
+  // last choices.
   for (const p of room.players.values()) {
     p.score = 0;
     p.streak = 0;
@@ -269,7 +325,7 @@ function startRound(room, n) {
   clearTimers(room);
   room.round = n;
 
-  const picked = buildRound(room.pool, room.usedTrackIds);
+  const picked = buildRound(room.pool, room.usedTrackIds, room.settings);
   room.usedTrackIds.add(picked.trackId);
   room.pending = picked;
 
@@ -305,6 +361,7 @@ function beginPlaying(room) {
   room.options = picked.options;
   room.correct = picked.correct; // SERVER-ONLY
   room.correctArtist = picked.artistName;
+  room.correctTrackName = picked.trackName;
   room.roundStartedAt = Date.now();
 
   const roundIndex = room.round - 1;
@@ -315,13 +372,13 @@ function beginPlaying(room) {
     roundIndex,
   });
   broadcastState(room);
-  room.timers.round = setTimeout(() => endRound(room), ROUND_MS);
+  room.timers.round = setTimeout(() => endRound(room), room.settings.roundMs);
 }
 
 // Everyone answered: let the clip keep playing briefly before the reveal.
 function endRoundSoon(room) {
   if (room.phase !== PHASE.ROUND_PLAYING) return;
-  const remaining = ROUND_MS - (Date.now() - room.roundStartedAt);
+  const remaining = room.settings.roundMs - (Date.now() - room.roundStartedAt);
   if (remaining > EARLY_END_GRACE_MS) {
     if (room.timers.round) clearTimeout(room.timers.round);
     room.timers.round = setTimeout(() => endRound(room), EARLY_END_GRACE_MS);
@@ -333,8 +390,10 @@ async function maybeRefreshPool(room) {
   if (room.usedTrackIds.size < room.pool.length - 4) return;
   room.refreshing = true;
   try {
-    const fresh = await fetchSongs(room.genre, 16);
-    if (fresh && fresh.length >= 4) {
+    const fresh = await fetchSongs(room.settings.genre, poolSizeFor(room.settings), {
+      decade: room.settings.decade,
+    });
+    if (fresh && fresh.length >= room.settings.optionsCount) {
       room.pool = fresh;
       room.usedTrackIds = new Set();
     }
@@ -361,7 +420,9 @@ function endRound(room) {
 
     p.streak = isCorrect ? (p.streak || 0) + 1 : 0;
     const streakBonus = isCorrect ? streakBonusFor(p.streak) : 0;
-    const pointsEarned = isCorrect ? questionValue + speedBonusFor(g.elapsedMs) + streakBonus : 0;
+    const pointsEarned = isCorrect
+      ? questionValue + speedBonusFor(g.elapsedMs, room.settings.roundMs) + streakBonus
+      : 0;
 
     p.score += pointsEarned;
     p.lastRoundScore = pointsEarned;
@@ -387,7 +448,7 @@ function endRound(room) {
   const roundWinner = fastest ? { name: fastest.name, answerTimeSeconds: fastest.answerTimeSeconds } : null;
 
   room.history.push({
-    trackName: correctName,
+    trackName: room.correctTrackName,
     artistName: room.correctArtist,
     winner: roundWinner ? roundWinner.name : null,
   });
@@ -397,7 +458,18 @@ function endRound(room) {
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
 
   // The round is OVER, so disclosing the answer here is intentional and safe.
-  io.to(room.code).emit("reveal", { correct: correctName, round: room.round, results, roundWinner, leaderboard });
+  // `correct` is the gradable value (title or artist); `track` always carries
+  // both so the client can show the full song regardless of mode.
+  io.to(room.code).emit("reveal", {
+    correct: correctName,
+    track: { trackName: room.correctTrackName, artistName: room.correctArtist },
+    mode: room.settings.mode,
+    round: room.round,
+    totalRounds: room.settings.rounds,
+    results,
+    roundWinner,
+    leaderboard,
+  });
   broadcastState(room);
 
   maybeRefreshPool(room);
@@ -406,7 +478,7 @@ function endRound(room) {
     if (room.players.size === 0) {
       resetToLobby(room);
       broadcastState(room);
-    } else if (room.round >= TOTAL_ROUNDS) {
+    } else if (room.round >= room.settings.rounds) {
       gameOver(room);
     } else {
       startRound(room, room.round + 1);
@@ -526,11 +598,13 @@ io.on("connection", (socket) => {
     room.loading = true;
     io.to(room.code).emit("loading", { message: "Loading songs..." }); // SAFE
 
-    const requested = String((payload && payload.genre) ?? "").toLowerCase();
-    room.genre = ALLOWED_GENRES.includes(requested) ? requested : "hip-hop";
+    // The host's requested settings are validated/clamped here — never trusted.
+    room.settings = sanitizeSettings(payload);
     let pool;
     try {
-      pool = await fetchSongs(room.genre, 16);
+      pool = await fetchSongs(room.settings.genre, poolSizeFor(room.settings), {
+        decade: room.settings.decade,
+      });
     } catch {
       room.loading = false;
       io.to(room.code).emit("errorMsg", { message: "Could not load songs. Try again." });
@@ -538,7 +612,7 @@ io.on("connection", (socket) => {
     }
     room.loading = false;
 
-    if (!pool || pool.length < 4) {
+    if (!pool || pool.length < room.settings.optionsCount) {
       io.to(room.code).emit("errorMsg", { message: "Not enough songs to start." });
       return;
     }

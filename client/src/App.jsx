@@ -32,6 +32,35 @@ const MAX_SPEED_BONUS = 350;
 // Genre options the host can pick before starting (Feature 1).
 const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
 
+// Host-configurable match settings. Each option is { label, value } and the
+// value is sent to the server, which re-validates against its own allowlist.
+const ROUND_OPTS = [
+  { label: "10", value: 10 },
+  { label: "5", value: 5 },
+  { label: "15", value: 15 },
+];
+const TIMER_OPTS = [
+  { label: "10s", value: 10000 },
+  { label: "7.5s", value: 7500 },
+  { label: "15s", value: 15000 },
+];
+const OPTION_OPTS = [
+  { label: "4", value: 4 },
+  { label: "3", value: 3 },
+  { label: "6", value: 6 },
+];
+const MODE_OPTS = [
+  { label: "Title", value: "TITLE" },
+  { label: "Artist", value: "ARTIST" },
+];
+const DECADE_OPTS = [
+  { label: "All", value: "all" },
+  { label: "2020s", value: "2020s" },
+  { label: "2010s", value: "2010s" },
+  { label: "2000s", value: "2000s" },
+  { label: "90s", value: "1990s" },
+];
+
 // Each option slot (1-4) gets its own arcade-button color. Full literal class
 // strings so Tailwind's JIT picks them up.
 const OPT_COLORS = [
@@ -78,9 +107,9 @@ export default function App() {
     primeAudio();
     joinRoom(code, name, idToken);
   };
-  const handleStart = (genre) => {
+  const handleStart = (settings) => {
     primeAudio();
-    start(genre);
+    start(settings);
   };
 
   const phase = state?.phase ?? "LOBBY";
@@ -321,6 +350,16 @@ function GoogleSignIn({ clientId, onSignIn }) {
 function Lobby({ players, myId, isHost, onStart, code }) {
   const [copied, setCopied] = useState(false);
   const [genre, setGenre] = useState("HIP-HOP");
+  // Match settings (host only). Defaults mirror the server's DEFAULT_SETTINGS.
+  const [settings, setSettings] = useState({
+    rounds: 10,
+    roundMs: 10000,
+    optionsCount: 4,
+    mode: "TITLE",
+    decade: "all",
+  });
+  const setField = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }));
+  const handleStart = () => onStart({ ...settings, genre: genre.toLowerCase() });
   const joinLink =
     typeof window !== "undefined" && code ? `${window.location.origin}?room=${code}` : "";
   const copy = async () => {
@@ -373,7 +412,7 @@ function Lobby({ players, myId, isHost, onStart, code }) {
       </div>
 
       {isHost ? (
-        <div className="space-y-4">
+        <div className="space-y-5">
           <div>
             <p className={EYEBROW}>Genre</p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -395,7 +434,14 @@ function Lobby({ players, myId, isHost, onStart, code }) {
               })}
             </div>
           </div>
-          <button onClick={() => onStart(genre.toLowerCase())} className={`${BTN_AMBER} w-full`}>
+
+          <SettingRow label="Mode" options={MODE_OPTS} value={settings.mode} onChange={setField("mode")} />
+          <SettingRow label="Rounds" options={ROUND_OPTS} value={settings.rounds} onChange={setField("rounds")} />
+          <SettingRow label="Timer" options={TIMER_OPTS} value={settings.roundMs} onChange={setField("roundMs")} />
+          <SettingRow label="Answers" options={OPTION_OPTS} value={settings.optionsCount} onChange={setField("optionsCount")} />
+          <SettingRow label="Era" options={DECADE_OPTS} value={settings.decade} onChange={setField("decade")} />
+
+          <button onClick={handleStart} className={`${BTN_AMBER} w-full`}>
             ▶ Start Game
           </button>
         </div>
@@ -404,6 +450,34 @@ function Lobby({ players, myId, isHost, onStart, code }) {
           <span className="animate-blink text-amber">▍</span> Waiting for host
         </p>
       )}
+    </div>
+  );
+}
+
+// A labelled segmented control for one match setting (host lobby).
+function SettingRow({ label, options, value, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className={EYEBROW}>{label}</p>
+      <div className="flex flex-wrap justify-end gap-1.5">
+        {options.map((o) => {
+          const active = o.value === value;
+          return (
+            <button
+              key={String(o.value)}
+              onClick={() => onChange(o.value)}
+              aria-pressed={active}
+              className={`min-w-[2.75rem] px-2.5 py-1.5 font-console text-xs uppercase tracking-[0.12em] transition-colors ${
+                active
+                  ? "bg-pink text-black"
+                  : "border border-rule text-dim hover:border-pink hover:text-pink"
+              }`}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -487,17 +561,19 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
   const questionValue =
     roundMeta?.questionValue ?? QUESTION_BASE + (state.round - 1) * QUESTION_STEP;
   const maxSpeedBonus = roundMeta?.maxSpeedBonus ?? MAX_SPEED_BONUS;
+  const isArtist = state.mode === "ARTIST";
+  const roundSeconds = Math.round((state.roundMs ?? 10000) / 1000);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <span className={EYEBROW}>Now playing</span>
+        <span className={EYEBROW}>{isArtist ? "Name the artist" : "Name the track"}</span>
         <span className="font-console text-xs uppercase tracking-[0.18em] text-dim">
           QV <span className="text-amber">{questionValue}</span> · Speed ≤{maxSpeedBonus}
         </span>
       </div>
 
-      <TimeCounter seconds={seconds} />
+      <TimeCounter seconds={seconds} total={roundSeconds} />
 
       {audioError && (
         <button
@@ -543,7 +619,10 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
       </div>
 
       {!hasGuessed && (
-        <p className={`${EYEBROW} text-center`}>Pick the track — faster = more points · keys 1-4</p>
+        <p className={`${EYEBROW} text-center`}>
+          {isArtist ? "Pick the artist" : "Pick the track"} — faster = more points · keys 1-
+          {state.options.length}
+        </p>
       )}
     </div>
   );
@@ -554,6 +633,9 @@ function Reveal({ reveal, myId }) {
   const results = reveal?.results ?? [];
   const winner = reveal?.roundWinner ?? null; // fastest correct answer, or null
   const round = reveal?.round ?? 0;
+  const total = reveal?.totalRounds ?? 10;
+  const track = reveal?.track ?? null; // { trackName, artistName } — always shown
+  const isArtist = reveal?.mode === "ARTIST";
   const leaderboard =
     reveal?.leaderboard ??
     [...results].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
@@ -563,7 +645,20 @@ function Reveal({ reveal, myId }) {
 
   return (
     <div className="space-y-6">
-      <p className={EYEBROW}>Round {String(round).padStart(2, "0")} / 10</p>
+      <p className={EYEBROW}>
+        Round {String(round).padStart(2, "0")} / {String(total).padStart(2, "0")}
+      </p>
+
+      {track && (
+        <div className={`${PANEL} px-5 py-4`}>
+          <p className={EYEBROW}>The answer</p>
+          <p className="mt-2 font-marquee text-lg font-black uppercase tracking-tight text-bone">
+            <span className={isArtist ? "text-amber" : ""}>{track.artistName}</span>
+            <span className="text-dim"> — </span>
+            <span className={isArtist ? "" : "text-amber"}>{track.trackName}</span>
+          </p>
+        </div>
+      )}
 
       {/* Winner card: HIGH SCORE, amber left accent, big points */}
       {winner ? (
@@ -754,8 +849,7 @@ function Leaderboard({ rows, myId, title }) {
 }
 
 // The CRT scoreboard — the design signature.
-function TimeCounter({ seconds }) {
-  const total = 10; // server round length; bar is display-only
+function TimeCounter({ seconds, total = 10 }) {
   const pct = Math.max(0, Math.min(100, (seconds / total) * 100));
   const low = seconds <= 3; // the only place red appears outside reveal
   const mm = Math.floor(seconds / 60);

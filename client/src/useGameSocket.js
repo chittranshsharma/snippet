@@ -107,7 +107,9 @@ export function useGameSocket() {
     (code, name, idToken) => socketRef.current?.emit("joinRoom", { code, name, idToken }),
     []
   );
-  const start = useCallback((genre) => socketRef.current?.emit("startGame", { genre }), []);
+  // settings = { genre, rounds, roundMs, optionsCount, mode, decade }. The server
+  // validates/clamps every field; the client only requests.
+  const start = useCallback((settings) => socketRef.current?.emit("startGame", settings || {}), []);
   const guess = useCallback((option) => socketRef.current?.emit("guess", { option }), []);
   const restart = useCallback(() => socketRef.current?.emit("restart"), []);
   const clearError = useCallback(() => setError(null), []);

@@ -73,6 +73,7 @@ function sample(pool, n) {
 // Turn raw iTunes results into clean game items.
 // Filters: must have previewUrl, must be longer than 20s. Dedupes by trackId
 // (iTunes can return the same track from multiple albums) to avoid repeats.
+// releaseYear is kept so callers can filter by decade.
 function normalize(results) {
   const list = Array.isArray(results) ? results : [];
   const seen = new Set();
@@ -87,35 +88,61 @@ function normalize(results) {
       artistName: r.artistName,
       previewUrl: r.previewUrl,
       trackId: r.trackId,
+      releaseYear: r.releaseDate ? Number(String(r.releaseDate).slice(0, 4)) : null,
     });
   }
   return out;
 }
 
+// Decade filtering. Ranges are inclusive; "all" (or unknown) means no filter.
+const DECADE_RANGES = {
+  "2020s": [2020, 2029],
+  "2010s": [2010, 2019],
+  "2000s": [2000, 2009],
+  "1990s": [1990, 1999],
+};
+function filterDecade(pool, decade) {
+  const range = DECADE_RANGES[decade];
+  if (!range) return pool;
+  const [lo, hi] = range;
+  return pool.filter((t) => t.releaseYear != null && t.releaseYear >= lo && t.releaseYear <= hi);
+}
+
+// Sample n tracks, preferring the requested decade. If the decade yields fewer
+// than n, fall back to the full pool so a game can always start.
+function pickFrom(pool, n, decade) {
+  const filtered = filterDecade(pool, decade);
+  const usable = filtered.length >= n ? filtered : pool;
+  return sample(usable, n);
+}
+
 // ----- Public API -----
 
 // Fetch `count` random preview tracks for a genre/search term.
-// Over-fetches 3x the requested count (capped at the iTunes 200 max) so that
-// after filtering and deduping there is still enough to sample from.
-export async function fetchSongs(genre, count) {
+// Over-fetches the requested count (capped at the iTunes 200 max) so that after
+// filtering and deduping there is still enough to sample from. opts.decade
+// ("2020s" | "2010s" | "2000s" | "1990s" | "all") biases the sample toward a
+// decade, falling back to the full pool when too few match.
+export async function fetchSongs(genre, count, opts = {}) {
   const term = String(genre ?? "").trim();
   if (!term) throw new Error("genre is required");
 
   const n = Number.isFinite(count) ? Math.floor(count) : 0;
   if (n <= 0) return [];
 
+  const decade = (opts && opts.decade) || "all";
   const key = term.toLowerCase();
   const cached = cache.get(key);
   const isFresh = cached && Date.now() - cached.ts < CACHE_TTL_MS;
 
   // Use the cache only if it is fresh AND large enough to satisfy this request.
   if (isFresh && cached.pool.length >= n) {
-    return sample(cached.pool, n);
+    return pickFrom(cached.pool, n, decade);
   }
 
-  // Over-fetch 3x the requested count (the URL's literal limit=50 is just an
-  // example; the real intent is "fetch 3x requested count"). Capped at 200.
-  const limit = Math.min(Math.max(n * 3, n), ITUNES_MAX_LIMIT);
+  // Over-fetch 5x the requested count (decade filtering can thin a pool a lot),
+  // capped at the iTunes 200 max.
+  const limit = Math.min(Math.max(n * 5, n), ITUNES_MAX_LIMIT);
   const url =
     `${SEARCH_BASE}?term=${encodeURIComponent(term)}&media=music&limit=${limit}`;
 
@@ -127,12 +154,12 @@ export async function fetchSongs(genre, count) {
     pool = normalize(data.results);
   } catch (err) {
     // On a network failure, fall back to stale cache if we have any.
-    if (cached) return sample(cached.pool, n);
+    if (cached) return pickFrom(cached.pool, n, decade);
     throw err;
   }
 
   cache.set(key, { pool, ts: Date.now() });
-  return sample(pool, n);
+  return pickFrom(pool, n, decade);
 }
 
 // Clear the in-memory cache (handy for tests).
