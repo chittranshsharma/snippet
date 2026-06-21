@@ -26,6 +26,46 @@ sign-in, an arcade visual theme.
 
 ---
 
+## 0.5. Post-handoff changelog — Waves A–E (read this!)
+
+Everything below this section describes the project *as of the original handoff*.
+Five feature waves shipped after it (commits `Wave A`…`Wave E`). The hard rules
+(§12) and the security contract are all intact and re-verified. What changed:
+
+- **Wave A — host-configurable settings.** Lobby now picks **rounds** (5/10/15),
+  **timer** (7.5/10/15s), **answers shown** (3/4/6), **mode** (guess **TITLE** or
+  **ARTIST**), and **decade** (all/2020s/2010s/2000s/90s). All validated
+  server-side (`sanitizeSettings`). Per-room `room.settings` replaced the
+  hardcoded `TOTAL_ROUNDS`/`ROUND_MS`. `reveal` now carries `{track, mode,
+  totalRounds}`; `state` carries `roundMs`/`mode`.
+- **Wave B — social.** Room **chat** (`chat` event) and **reactions** (`react`
+  event, whitelist `GG/WOW/!!/??/★/♥`), both rate-limited; **Google avatars**
+  (`avatar` URL in `state.players`; email/sub still server-only); **profanity
+  filter** (`profanity.js`) on guest handles + chat; per-socket rate limiter.
+- **Wave C — resilience.** **Reconnect/rejoin** via a per-tab token
+  (sessionStorage): a mid-game drop **holds the slot 60s**, `rejoin` re-keys the
+  socket with score intact; **spectator mode** (join mid-game → watch, can't
+  guess, excluded from scoring); **Quick Play** matchmaking (`quickPlay`);
+  rematch promotes spectators. New `state.players` fields `spectator`/`connected`.
+- **Wave D — feel.** Synthesized **sound** (`sound.js`, Web Audio, no files) with
+  a persisted **mute** toggle; **PWA** (`manifest.webmanifest`, `sw.js`,
+  `icon.svg`); accessibility (aria-live announcements, button labels).
+- **Wave E — quality/infra.** Pure logic extracted to **`gameLogic.js`**;
+  **Vitest** suite in `test/` (`npm test`, 23 tests, offline); **CI**
+  (`.github/workflows/ci.yml`); structured **`log.js`**; **gated** scale hooks —
+  `storage.js` (Postgres global leaderboard, `GET /leaderboard`, needs
+  `DATABASE_URL`+`pg`), Redis adapter (`REDIS_URL`), Sentry (`SENTRY_DSN`), all
+  dormant unless configured (see DEPLOY.md).
+
+**New client→server events:** `chat`, `react`, `quickPlay`, `rejoin` (+ a
+`public` flag on `createRoom`). **New server→client:** `chat`, `reaction`,
+`rejoinFailed` (+ `held` on `playerLeft`, `token`/`spectator` on `roomJoined`).
+**New modules:** `gameLogic.js`, `profanity.js`, `log.js`, `storage.js`,
+`client/src/sound.js`. Scratch smoke tests `_wave{A,B,C}.mjs` are gitignored
+(`_*.mjs`); the formal tests live in `test/`.
+
+---
+
 ## 1. How to run locally
 
 ```bash

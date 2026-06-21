@@ -22,11 +22,25 @@ The frontend connects to the backend over `wss://` using `VITE_SOCKET_URL`.
      (comma-separate if you have several; locks CORS down from `*`).
    - `PORT` is provided by Railway automatically — the server already reads it.
    - `GOOGLE_CLIENT_ID` = (Phase 2, see below).
+   - **Optional** (all dormant unless set):
+     - `LOG_FORMAT=json` — one-line JSON logs for the log viewer.
+     - `DATABASE_URL` — Postgres (Railway add-on) for a **global leaderboard** +
+       match history. Also run `npm install pg` on the backend. Exposes
+       `GET /leaderboard`. Without it, the game runs exactly as before.
+     - `REDIS_URL` — attaches the Socket.IO Redis adapter for cross-instance
+       broadcasts. Also `npm install @socket.io/redis-adapter ioredis`. See the
+       scale note below before relying on it.
+     - `SENTRY_DSN` — error monitoring. Also `npm install @sentry/node`.
 5. Deploy. Railway gives a public URL like `https://snippet-production.up.railway.app`.
    Verify: open `/` — you should see `{"ok":true,"rooms":0,"players":0}`.
 
-> Note: in-memory rooms reset on every redeploy/restart, and you can only run a
-> single instance (no Redis adapter yet). Fine for launch; revisit for scale.
+> **Scale note (important).** Room/game state lives in this process's memory.
+> The `REDIS_URL` adapter only fans out *socket broadcasts* across instances — it
+> does **not** share game state. So today you must run a **single instance** (or
+> use sticky sessions so a room's players always hit the same instance). A
+> redeploy/restart still wipes active games. Full horizontal scale needs the
+> room state externalized; the Redis adapter + Postgres storage are the
+> groundwork. Players reconnect within a 60s grace window after a drop.
 
 ---
 
