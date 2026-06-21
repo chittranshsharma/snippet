@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+client/node_modules/
+
+# logs
+*.log
+npm-debug.log*
+
+# os / editor
+.DS_Store
+
+# throwaway test/scratch files
+_*.mjs
+
+# build output
+client/dist/
+dist/

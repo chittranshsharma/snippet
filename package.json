@@ -1,0 +1,14 @@
+{
+  "name": "song-trivia-server",
+  "version": "1.0.0",
+  "description": "Server-authoritative multiplayer music guessing game (single room).",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "socket.io": "^4.7.5"
+  }
+}
