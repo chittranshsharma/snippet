@@ -9,12 +9,14 @@ body,
 }
 
 body {
-  background: #0a0b0d;
+  /* Indigo canvas + a faint dot grid for arcade-cabinet depth. */
+  background-color: #13131e;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 22px 22px;
   font-family: "Space Mono", ui-monospace, monospace;
 }
 
 /* ----- CRT signature ----- */
-/* Scanlines: a fixed, non-interactive overlay over whatever uses .crt-scan. */
 .crt-scan::after {
   content: "";
   position: fixed;
@@ -23,24 +25,28 @@ body {
   z-index: 60;
   background: repeating-linear-gradient(
     rgba(0, 0, 0, 0) 0 2px,
-    rgba(0, 0, 0, 0.16) 2px 3px
+    rgba(0, 0, 0, 0.14) 2px 3px
   );
   mix-blend-mode: multiply;
 }
 
-/* Phosphor bloom on amber numerals (the scoreboard). */
+/* Phosphor bloom — gold scoreboard, pink GO, red low-time. */
 .phosphor {
-  color: #ffb000;
-  text-shadow: 0 0 2px rgba(255, 176, 0, 0.7), 0 0 10px rgba(255, 176, 0, 0.45);
+  color: #ffc93c;
+  text-shadow: 0 0 2px rgba(255, 201, 60, 0.7), 0 0 12px rgba(255, 201, 60, 0.45);
+}
+.phosphor-pink {
+  color: #ff3d7f;
+  text-shadow: 0 0 2px rgba(255, 61, 127, 0.7), 0 0 14px rgba(255, 61, 127, 0.5);
 }
 .phosphor-bad {
-  color: #ff5c5c;
-  text-shadow: 0 0 2px rgba(255, 92, 92, 0.7), 0 0 10px rgba(255, 92, 92, 0.45);
+  color: #ff4d6d;
+  text-shadow: 0 0 2px rgba(255, 77, 109, 0.7), 0 0 12px rgba(255, 77, 109, 0.45);
 }
 
 /* Barrel vignette on the play frame. */
 .bezel {
-  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.45);
 }
 
 /* Respect reduced-motion: kill scanlines + all animation/transition. */

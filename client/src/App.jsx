@@ -13,11 +13,12 @@ import { useGameSocket } from "./useGameSocket";
 // ---- Shared class fragments (drive the look across every screen) ----
 const EYEBROW = "font-console text-[11px] uppercase tracking-[0.2em] text-dim";
 const PANEL = "border border-rule bg-cabinet";
+// Primary CTA = pink with a soft neon glow.
 const BTN_AMBER =
-  "bg-amber px-5 py-4 font-console text-sm uppercase tracking-[0.2em] text-black " +
-  "transition-[transform,background-color] hover:bg-[#ffc233] active:scale-[.98] " +
-  "focus:outline-none focus:ring-2 focus:ring-amber focus:ring-offset-2 focus:ring-offset-void " +
-  "disabled:cursor-not-allowed disabled:bg-rule disabled:text-dim";
+  "bg-pink px-5 py-4 font-console text-sm uppercase tracking-[0.2em] text-black " +
+  "shadow-[0_0_24px_-6px_#FF3D7F] transition-[transform,background-color] hover:bg-[#ff5e96] active:scale-[.98] " +
+  "focus:outline-none focus:ring-2 focus:ring-pink focus:ring-offset-2 focus:ring-offset-void " +
+  "disabled:cursor-not-allowed disabled:bg-rule disabled:text-dim disabled:shadow-none";
 const BTN_GHOST =
   "border border-rule bg-cabinet px-5 py-3 font-console text-sm uppercase tracking-[0.2em] text-bone " +
   "transition-colors hover:border-amber hover:text-amber active:scale-[.98] " +
@@ -30,6 +31,15 @@ const MAX_SPEED_BONUS = 350;
 
 // Genre options the host can pick before starting (Feature 1).
 const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
+
+// Each option slot (1-4) gets its own arcade-button color. Full literal class
+// strings so Tailwind's JIT picks them up.
+const OPT_COLORS = [
+  { num: "text-cyan", sel: "border-cyan bg-cyan/10 ring-cyan", hov: "enabled:hover:border-cyan enabled:hover:bg-cyan/10" },
+  { num: "text-pink", sel: "border-pink bg-pink/10 ring-pink", hov: "enabled:hover:border-pink enabled:hover:bg-pink/10" },
+  { num: "text-good", sel: "border-good bg-good/10 ring-good", hov: "enabled:hover:border-good enabled:hover:bg-good/10" },
+  { num: "text-yellow", sel: "border-yellow bg-yellow/10 ring-yellow", hov: "enabled:hover:border-yellow enabled:hover:bg-yellow/10" },
+];
 
 export default function App() {
   const {
@@ -166,7 +176,7 @@ function Masthead({ phase, round, total }) {
   return (
     <header className="flex items-end justify-between border-b border-rule pb-4">
       <h1 className="font-marquee text-2xl font-black uppercase leading-none tracking-tight text-bone sm:text-3xl">
-        Name<span className="text-amber">·</span>That<span className="text-amber">·</span>Track
+        Name<span className="text-pink">·</span>That<span className="text-pink">·</span>Track
       </h1>
       <span className={EYEBROW}>{label}</span>
     </header>
@@ -183,11 +193,11 @@ function JoinScreen({ onJoin }) {
   };
   return (
     <form onSubmit={submit} className="mx-auto w-full max-w-sm animate-rise">
-      <p className="font-coin text-base leading-relaxed text-amber">INSERT COIN</p>
+      <p className="font-coin text-base leading-relaxed text-pink">INSERT COIN</p>
       <div className="mt-3 h-px w-24 bg-rule" />
       <p className="mt-4 font-console text-sm text-dim">Pick a handle to play.</p>
 
-      <div className="mt-8 flex items-center border-b-2 border-rule focus-within:border-amber">
+      <div className="mt-8 flex items-center border-b-2 border-rule focus-within:border-pink">
         <input
           autoFocus
           value={name}
@@ -198,7 +208,7 @@ function JoinScreen({ onJoin }) {
           className="w-full bg-transparent px-1 py-3 font-console text-lg uppercase tracking-widest text-bone placeholder:text-dim focus:outline-none"
         />
         {name.length === 0 && (
-          <span className="mr-1 h-5 w-2 animate-blink bg-amber" aria-hidden="true" />
+          <span className="mr-1 h-5 w-2 animate-blink bg-pink" aria-hidden="true" />
         )}
       </div>
 
@@ -236,7 +246,7 @@ function Lobby({ players, myId, isHost, onStart }) {
               className={`flex items-center justify-between px-4 py-3 ${i % 2 ? "bg-void/40" : ""}`}
             >
               <span className="flex items-center gap-3">
-                <span className="font-console text-xs text-amber">{i + 1}UP</span>
+                <span className="font-console text-xs text-cyan">{i + 1}UP</span>
                 <span className="font-console uppercase tracking-wide text-bone">{p.name}</span>
               </span>
               <span className="flex items-center gap-3 font-console text-[10px] uppercase tracking-[0.2em]">
@@ -278,8 +288,8 @@ function Lobby({ players, myId, isHost, onStart }) {
                     onClick={() => setGenre(g)}
                     className={`px-3 py-2 font-console text-xs uppercase tracking-[0.2em] transition-colors ${
                       active
-                        ? "bg-amber text-black"
-                        : "border border-rule text-dim hover:border-amber hover:text-amber"
+                        ? "bg-pink text-black"
+                        : "border border-rule text-dim hover:border-pink hover:text-pink"
                     }`}
                   >
                     {g}
@@ -411,29 +421,24 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
         {state.options.map((opt, i) => {
           const selected = myGuess === opt;
           const dimmed = hasGuessed && !selected; // lock animation
+          const c = OPT_COLORS[i % OPT_COLORS.length];
           return (
             <div key={opt}>
               <button
                 onClick={() => onGuess(opt)}
                 disabled={hasGuessed}
                 className={[
-                  "flex w-full items-center gap-4 border px-4 py-4 text-left font-console text-sm uppercase tracking-wide transition-all",
-                  selected
-                    ? "border-amber bg-amber/10 text-bone ring-2 ring-amber"
-                    : "border-rule bg-cabinet text-bone enabled:hover:border-amber enabled:hover:bg-amber/10",
+                  "flex w-full items-center gap-4 border px-4 py-4 text-left font-console text-sm uppercase tracking-wide text-bone transition-all",
+                  selected ? `ring-2 ${c.sel}` : `border-rule bg-cabinet ${c.hov}`,
                   dimmed ? "pointer-events-none opacity-30" : "",
                   "disabled:cursor-not-allowed",
                 ].join(" ")}
               >
-                <span className={`font-console text-xs ${selected ? "text-amber" : "text-dim"}`}>
-                  {i + 1}
-                </span>
+                <span className={`font-console text-xs ${c.num}`}>{i + 1}</span>
                 <span className="min-w-0 truncate">{opt}</span>
               </button>
               {hasGuessed && selected && (
-                <p className="mt-1 font-console text-xs uppercase tracking-[0.2em] text-amber">
-                  Locked
-                </p>
+                <p className={`mt-1 font-console text-xs uppercase tracking-[0.2em] ${c.num}`}>Locked</p>
               )}
             </div>
           );
@@ -716,9 +721,9 @@ function Toast({ message }) {
 function LoadingOverlay({ message }) {
   return (
     <div className="crt-scan fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-void/95">
-      <p className="font-coin text-xs text-amber">LOADING</p>
+      <p className="font-coin text-xs text-pink">LOADING</p>
       <p className="font-console text-sm uppercase tracking-[0.2em] text-dim">
-        {message} <span className="animate-blink text-amber">▍</span>
+        {message} <span className="animate-blink text-pink">▍</span>
       </p>
     </div>
   );
@@ -746,7 +751,7 @@ function CountdownOverlay({ seconds, round, worth, maxPoints }) {
           {n}
         </span>
       ) : (
-        <span className="font-coin text-5xl leading-none phosphor">GO</span>
+        <span className="font-coin text-5xl leading-none phosphor-pink">GO</span>
       )}
       {worth != null && (
         <div className="space-y-1">

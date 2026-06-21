@@ -4,15 +4,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Minimalist-arcade palette: bone on void, one amber phosphor.
-        void: "#0A0B0D",
-        cabinet: "#131418",
-        rule: "#24262C",
-        bone: "#ECEAE1",
-        dim: "#777C85",
-        amber: "#FFB000",
-        good: "#34D27B", // correct — reveal only
-        bad: "#FF5C5C", // wrong / error — reveal only
+        // Vibrant-arcade palette: dark indigo canvas + a structured neon set.
+        void: "#13131E", // app background (indigo, not flat black)
+        cabinet: "#1B1B2A", // panels / cards / option fills
+        rule: "#2E2E44", // hairline borders
+        bone: "#EDEDF2", // primary text
+        dim: "#8A8AA0", // secondary text
+        amber: "#FFC93C", // gold — scoreboard / hi-score / host
+        pink: "#FF3D7F", // primary CTA / brand accent
+        cyan: "#36D8FF", // secondary accent / option 1
+        purple: "#B14BFF", // sparing accent
+        yellow: "#FFD23F", // option 4 / highlight
+        good: "#3DF07A", // correct (green) — reveal + option 3
+        bad: "#FF4D6D", // wrong / error (red)
       },
       fontFamily: {
         marquee: ["Archivo", "system-ui", "sans-serif"],
