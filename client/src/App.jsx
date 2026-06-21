@@ -29,6 +29,9 @@ const QUESTION_BASE = 300;
 const QUESTION_STEP = 250;
 const MAX_SPEED_BONUS = 350;
 
+// Genre options the host can pick before starting (Feature 1).
+const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
+
 export default function App() {
   const {
     connected, myId, state, reveal, gameOver, loading, error, roundMeta,
@@ -153,6 +156,7 @@ function JoinScreen({ onJoin }) {
 function Lobby({ players, myId, isHost, onStart }) {
   const url = typeof window !== "undefined" ? window.location.href : "";
   const [copied, setCopied] = useState(false);
+  const [genre, setGenre] = useState("HIP-HOP");
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(url);
@@ -206,9 +210,32 @@ function Lobby({ players, myId, isHost, onStart }) {
       </div>
 
       {isHost ? (
-        <button onClick={onStart} className={`${BTN} w-full py-5 text-base`}>
-          ▶ Start Game
-        </button>
+        <div className="space-y-4">
+          <div>
+            <p className={EYEBROW}>Genre</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {GENRES.map((g) => {
+                const active = g === genre;
+                return (
+                  <button
+                    key={g}
+                    onClick={() => setGenre(g)}
+                    className={`px-3 py-2 font-mono text-xs uppercase tracking-[0.2em] transition-colors ${
+                      active
+                        ? "bg-white text-black"
+                        : "border border-zinc-600 text-zinc-400 hover:border-zinc-400"
+                    }`}
+                  >
+                    {g}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <button onClick={() => onStart(genre.toLowerCase())} className={`${BTN} w-full py-5 text-base`}>
+            ▶ Start Game
+          </button>
+        </div>
       ) : (
         <p className={`${EYEBROW} text-center`}>Waiting for host to drop the needle…</p>
       )}

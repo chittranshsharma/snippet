@@ -19,6 +19,9 @@ const QUESTION_BASE = 300;    // round 0 base value
 const QUESTION_STEP = 250;    // added per round index
 const MAX_SPEED_BONUS = 350;  // full speed bonus for an instant correct answer
 
+// Genres the host may choose (validated server-side; defaults to hip-hop).
+const ALLOWED_GENRES = ["hip-hop", "r&b", "rap", "drill", "trap"];
+
 // ----- Game phases (the state machine) -----
 // LOBBY -> ROUND_PLAYING -> ROUND_REVEAL -> (loop) -> GAME_OVER
 const PHASE = {
@@ -404,8 +407,8 @@ io.on("connection", (socket) => {
     broadcastState();
   });
 
-  // --- start: leave the lobby and play round 1 ---
-  socket.on("start", async () => {
+  // --- startGame: leave the lobby and play round 1 (optional { genre }) ---
+  socket.on("startGame", async (payload) => {
     if (room.phase !== PHASE.LOBBY) {
       socket.emit("errorMsg", { message: "Game already started." });
       return;
@@ -428,7 +431,8 @@ io.on("connection", (socket) => {
     room.loading = true;
     io.emit("loading", { message: "Loading songs..." });
 
-    room.genre = "hip-hop";
+    const requested = String(payload?.genre ?? "").toLowerCase();
+    room.genre = ALLOWED_GENRES.includes(requested) ? requested : "hip-hop";
     let pool;
     try {
       pool = await fetchSongs(room.genre, 16);

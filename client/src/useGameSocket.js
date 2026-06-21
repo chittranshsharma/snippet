@@ -75,7 +75,7 @@ export function useGameSocket() {
 
   // --- The only messages the client may send ---
   const join = useCallback((name) => socketRef.current?.emit("join", { name }), []);
-  const start = useCallback(() => socketRef.current?.emit("start"), []);
+  const start = useCallback((genre) => socketRef.current?.emit("startGame", { genre }), []);
   const guess = useCallback((option) => socketRef.current?.emit("guess", { option }), []);
   const restart = useCallback(() => socketRef.current?.emit("restart"), []);
   const clearError = useCallback(() => setError(null), []);
