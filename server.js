@@ -6,6 +6,7 @@
 // correct answer is NEVER sent to clients while a round is live.
 
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { Server } from "socket.io";
 import { fetchSongs } from "./itunesFetcher.js";
 import { OAuth2Client } from "google-auth-library";
@@ -18,6 +19,8 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN
   ? process.env.CLIENT_ORIGIN.split(",").map((s) => s.trim())
   : "*";
 const MAX_PLAYERS = 8;
+const MAX_SPECTATORS = 16; // watchers allowed per room (don't count toward MAX_PLAYERS)
+const REJOIN_GRACE_MS = 60000; // hold a disconnected player's slot this long mid-game
 const REVEAL_MS = 3000; // pause on the reveal screen before next round
 const EARLY_END_GRACE_MS = 3000; // keep the clip playing this long after everyone answers
 const QUESTION_BASE = 300;
@@ -116,7 +119,15 @@ function makeRoom(code) {
     players: new Map(), // socketId -> player
     timers: { round: null, reveal: null, countdown: null },
     refreshing: false,
+    isPublic: false, // listed for quick-play matchmaking
+    disconnectGrace: new Map(), // rejoin token -> grace timeout
   };
+}
+
+// A stable per-session token lets a player rejoin after a disconnect with their
+// score intact (socket ids change on reconnect, this does not).
+function makeToken() {
+  return randomUUID();
 }
 
 function makePlayer(id, name) {
@@ -127,6 +138,9 @@ function makePlayer(id, name) {
     email: null, // SERVER-ONLY, never broadcast
     sub: null, // SERVER-ONLY Google subject id
     picture: null, // public Google avatar URL (safe to broadcast), or null
+    token: null, // SERVER-ONLY rejoin token (never broadcast)
+    connected: true, // false while held during the rejoin grace window
+    spectator: false, // joined mid-game; watches, cannot guess or score
     score: 0,
     streak: 0,
     hasGuessed: false,
@@ -158,6 +172,90 @@ function rateLimited(socket, key, max, windowMs) {
   hits.push(now);
   socket.data.rl[key] = hits;
   return false;
+}
+
+// ----- Membership helpers -----
+
+function playerCount(room) {
+  let n = 0;
+  for (const p of room.players.values()) if (!p.spectator) n++;
+  return n;
+}
+function spectatorCount(room) {
+  let n = 0;
+  for (const p of room.players.values()) if (p.spectator) n++;
+  return n;
+}
+
+// Create a player, set identity + a rejoin token, and add them to the room.
+// Used by createRoom, joinRoom (incl. spectators), and quickPlay.
+function attachPlayer(room, socket, id, opts = {}) {
+  socket.join(room.code);
+  socket.data.roomCode = room.code;
+  const player = makePlayer(socket.id, id.name);
+  player.google = id.google;
+  player.email = id.email || null;
+  player.sub = id.sub || null;
+  player.picture = id.picture || null;
+  player.token = makeToken();
+  player.spectator = Boolean(opts.spectator);
+  socket.data.token = player.token;
+  room.players.set(socket.id, player);
+  socket.emit("roomJoined", { code: room.code, id: socket.id, token: player.token, spectator: player.spectator });
+  return player;
+}
+
+// Re-key a player from an old socket id to a new one, preserving insertion
+// order (so host order is stable) and moving any in-flight guess.
+function rekeyPlayer(room, oldId, newId) {
+  if (oldId === newId) return;
+  const rebuilt = new Map();
+  for (const [id, p] of room.players) {
+    if (id === oldId) {
+      p.id = newId;
+      rebuilt.set(newId, p);
+    } else {
+      rebuilt.set(id, p);
+    }
+  }
+  room.players = rebuilt;
+  if (room.guesses.has(oldId)) {
+    room.guesses.set(newId, room.guesses.get(oldId));
+    room.guesses.delete(oldId);
+  }
+}
+
+// Remove a player for good (grace expired, or an immediate leave), handling host
+// transfer, empty-room cleanup, and mid-game "waiting" notices.
+function finalizeLeave(room, id) {
+  const player = room.players.get(id);
+  if (!player) return;
+  if (player.token) {
+    const t = room.disconnectGrace.get(player.token);
+    if (t) {
+      clearTimeout(t);
+      room.disconnectGrace.delete(player.token);
+    }
+  }
+  const wasHost = !player.spectator && [...room.players.keys()][0] === id;
+  const name = player.name;
+  room.players.delete(id);
+  io.to(room.code).emit("playerLeft", { name }); // SAFE
+
+  if (room.players.size === 0) {
+    deleteRoom(room);
+    return;
+  }
+  if (wasHost) {
+    const next = [...room.players.values()].find((p) => !p.spectator);
+    if (next) io.to(room.code).emit("newHost", { name: next.name }); // SAFE
+  }
+  const activePlayers = [...room.players.values()].filter((p) => !p.spectator && p.connected);
+  if (activePlayers.length === 1 && (room.phase === PHASE.ROUND_PLAYING || room.phase === PHASE.ROUND_REVEAL)) {
+    io.to(room.code).emit("waitingForPlayers", {}); // SAFE
+  }
+  if (room.phase === PHASE.ROUND_PLAYING && allGuessed(room)) endRoundSoon(room);
+  broadcastState(room);
 }
 
 // ----- Pure helpers (room-independent) -----
@@ -286,6 +384,7 @@ function publicState(room) {
     roundMs: room.settings.roundMs, // round length, so the client bar matches
     mode: room.settings.mode, // TITLE | ARTIST — for client labels only
     maxPlayers: MAX_PLAYERS,
+    isPublic: room.isPublic,
     audioUrl: inRound ? room.audioUrl : null,
     options: inRound ? room.options : null,
     timeRemainingMs:
@@ -297,6 +396,8 @@ function publicState(room) {
       name: p.name,
       google: p.google, // verified badge only; email/sub never leave the server
       avatar: p.picture, // public Google photo URL or null (guests render an initial)
+      spectator: p.spectator, // watching, not scoring
+      connected: p.connected, // false while held during a rejoin grace window
       score: p.score,
       hasGuessed: p.hasGuessed,
       lastRoundScore: p.lastRoundScore,
@@ -309,8 +410,9 @@ function broadcastState(room) {
 }
 
 function allGuessed(room) {
-  if (room.players.size === 0) return false;
-  for (const p of room.players.values()) if (!p.hasGuessed) return false;
+  const active = [...room.players.values()].filter((p) => !p.spectator && p.connected);
+  if (active.length === 0) return false;
+  for (const p of active) if (!p.hasGuessed) return false;
   return true;
 }
 
@@ -332,18 +434,22 @@ function resetToLobby(room) {
   room.history = [];
   // room.settings is intentionally preserved so "play again" keeps the host's
   // last choices.
+  for (const t of room.disconnectGrace.values()) clearTimeout(t);
+  room.disconnectGrace.clear();
   for (const p of room.players.values()) {
     p.score = 0;
     p.streak = 0;
     p.hasGuessed = false;
     p.lastRoundScore = 0;
     p.lastCorrect = false;
+    p.connected = true;
+    p.spectator = false; // promote any watchers into the rematch
   }
 }
 
 // Begin round `n` with a 3-2-1 countdown, then the audio.
 function startRound(room, n) {
-  if (room.players.size === 0) {
+  if (playerCount(room) === 0) {
     resetToLobby(room);
     broadcastState(room);
     return;
@@ -375,7 +481,7 @@ function startRound(room, n) {
 }
 
 function beginPlaying(room) {
-  if (room.players.size === 0 || !room.pending) {
+  if (playerCount(room) === 0 || !room.pending) {
     resetToLobby(room);
     broadcastState(room);
     return;
@@ -438,7 +544,8 @@ function endRound(room) {
   const questionValue = questionValueFor(room.round - 1);
 
   let fastest = null;
-  const results = [...room.players.values()].map((p) => {
+  const scoring = [...room.players.values()].filter((p) => !p.spectator);
+  const results = scoring.map((p) => {
     const g = room.guesses.get(p.id) || null;
     const answered = g != null;
     const isCorrect = answered && g.option === correctName;
@@ -479,7 +586,8 @@ function endRound(room) {
     winner: roundWinner ? roundWinner.name : null,
   });
 
-  const leaderboard = [...room.players.values()]
+  const leaderboard = scoring
+    .slice()
     .sort((a, b) => b.score - a.score)
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
 
@@ -501,7 +609,7 @@ function endRound(room) {
   maybeRefreshPool(room);
 
   room.timers.reveal = setTimeout(() => {
-    if (room.players.size === 0) {
+    if (playerCount(room) === 0) {
       resetToLobby(room);
       broadcastState(room);
     } else if (room.round >= room.settings.rounds) {
@@ -516,6 +624,7 @@ function gameOver(room) {
   clearTimers(room);
   room.phase = PHASE.GAME_OVER;
   const leaderboard = [...room.players.values()]
+    .filter((p) => !p.spectator)
     .sort((a, b) => b.score - a.score)
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
   io.to(room.code).emit("gameOver", { leaderboard, roundHistory: room.history }); // SAFE: round over
@@ -546,23 +655,17 @@ io.on("connection", (socket) => {
       if (roomOf(socket)) return;
       const code = makeCode();
       const room = makeRoom(code);
+      room.isPublic = Boolean(payload && payload.public);
       rooms.set(code, room);
-      socket.join(code);
-      socket.data.roomCode = code;
-      const player = makePlayer(socket.id, id.name);
-      player.google = id.google;
-      player.email = id.email || null;
-      player.sub = id.sub || null;
-      player.picture = id.picture || null;
-      room.players.set(socket.id, player);
-      socket.emit("roomJoined", { code, id: socket.id }); // SAFE
+      attachPlayer(room, socket, id);
       broadcastState(room);
     } finally {
       socket.data.busy = false;
     }
   });
 
-  // --- joinRoom: join an existing room by code ---
+  // --- joinRoom: join by code. In LOBBY you join as a player; once a game is in
+  // progress you join as a spectator (watch only). ---
   socket.on("joinRoom", async (payload) => {
     if (socket.data.busy || roomOf(socket)) return;
     socket.data.busy = true;
@@ -573,12 +676,13 @@ io.on("connection", (socket) => {
         socket.emit("errorMsg", { message: "Room not found." });
         return;
       }
-      if (room.phase !== PHASE.LOBBY) {
-        socket.emit("errorMsg", { message: "Game already in progress." });
+      const asSpectator = room.phase !== PHASE.LOBBY;
+      if (!asSpectator && playerCount(room) >= MAX_PLAYERS) {
+        socket.emit("errorMsg", { message: "Room is full." });
         return;
       }
-      if (room.players.size >= MAX_PLAYERS) {
-        socket.emit("errorMsg", { message: "Room is full." });
+      if (asSpectator && spectatorCount(room) >= MAX_SPECTATORS) {
+        socket.emit("errorMsg", { message: "Too many spectators." });
         return;
       }
       const id = await resolveIdentity(payload);
@@ -587,19 +691,88 @@ io.on("connection", (socket) => {
         return;
       }
       if (roomOf(socket)) return;
-      socket.join(code);
-      socket.data.roomCode = code;
-      const player = makePlayer(socket.id, id.name);
-      player.google = id.google;
-      player.email = id.email || null;
-      player.sub = id.sub || null;
-      player.picture = id.picture || null;
-      room.players.set(socket.id, player);
-      socket.emit("roomJoined", { code, id: socket.id }); // SAFE
+      attachPlayer(room, socket, id, { spectator: asSpectator });
       broadcastState(room);
     } finally {
       socket.data.busy = false;
     }
+  });
+
+  // --- quickPlay: matchmaking. Join an open public lobby, or open a new one. ---
+  socket.on("quickPlay", async (payload) => {
+    if (socket.data.busy || roomOf(socket)) return;
+    socket.data.busy = true;
+    try {
+      const id = await resolveIdentity(payload);
+      if (id.error) {
+        socket.emit("errorMsg", { message: id.error });
+        return;
+      }
+      if (roomOf(socket)) return;
+      let room = null;
+      for (const r of rooms.values()) {
+        if (r.isPublic && r.phase === PHASE.LOBBY && playerCount(r) < MAX_PLAYERS) {
+          room = r;
+          break;
+        }
+      }
+      if (!room) {
+        const code = makeCode();
+        room = makeRoom(code);
+        room.isPublic = true;
+        rooms.set(code, room);
+      }
+      attachPlayer(room, socket, id);
+      broadcastState(room);
+    } finally {
+      socket.data.busy = false;
+    }
+  });
+
+  // --- rejoin: reattach to a held slot after a disconnect, score intact. ---
+  socket.on("rejoin", (payload) => {
+    if (roomOf(socket)) return;
+    const code = String((payload && payload.code) ?? "").toUpperCase().trim();
+    const token = String((payload && payload.token) ?? "");
+    const room = rooms.get(code);
+    if (!room || !token) {
+      socket.emit("rejoinFailed", {});
+      return;
+    }
+    let target = null;
+    for (const p of room.players.values()) {
+      if (p.token === token) {
+        target = p;
+        break;
+      }
+    }
+    if (!target) {
+      socket.emit("rejoinFailed", {});
+      return;
+    }
+    const oldId = target.id;
+    rekeyPlayer(room, oldId, socket.id);
+    target.connected = true;
+    const grace = room.disconnectGrace.get(token);
+    if (grace) {
+      clearTimeout(grace);
+      room.disconnectGrace.delete(token);
+    }
+    socket.join(room.code);
+    socket.data.roomCode = room.code;
+    socket.data.token = token;
+    socket.emit("roomJoined", { code: room.code, id: socket.id, token, spectator: target.spectator }); // SAFE
+    // Re-send the current phase's payload so the rejoiner's UI is correct.
+    if (room.phase === PHASE.GAME_OVER) {
+      socket.emit("gameOver", {
+        leaderboard: [...room.players.values()]
+          .filter((p) => !p.spectator)
+          .sort((a, b) => b.score - a.score)
+          .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score })),
+        roundHistory: room.history,
+      });
+    }
+    broadcastState(room);
   });
 
   // --- startGame: host starts round 1 (optional { genre }) ---
@@ -668,6 +841,10 @@ io.on("connection", (socket) => {
       socket.emit("errorMsg", { message: "You are not in the game." });
       return;
     }
+    if (player.spectator) {
+      socket.emit("errorMsg", { message: "Spectators can't guess." });
+      return;
+    }
     // S1 (rate limit): one guess per player per round.
     if (player.hasGuessed) {
       socket.emit("errorMsg", { message: "Already guessed this round." });
@@ -729,25 +906,21 @@ io.on("connection", (socket) => {
     const player = room.players.get(socket.id);
     if (!player) return;
 
-    const wasHost = [...room.players.keys()][0] === socket.id;
-    const name = player.name;
-    room.players.delete(socket.id);
-
-    io.to(room.code).emit("playerLeft", { name }); // SAFE
-
-    if (room.players.size === 0) {
-      deleteRoom(room); // empty room is discarded
+    const midGame = room.phase === PHASE.ROUND_PLAYING || room.phase === PHASE.ROUND_REVEAL;
+    // Mid-game players keep their slot (and score) for a grace window so they
+    // can rejoin with their token. Spectators and lobby/game-over leavers go now.
+    if (midGame && !player.spectator && player.token) {
+      player.connected = false;
+      io.to(room.code).emit("playerLeft", { name: player.name, held: true }); // SAFE
+      const token = player.token;
+      const heldId = socket.id;
+      const timer = setTimeout(() => finalizeLeave(room, heldId), REJOIN_GRACE_MS);
+      room.disconnectGrace.set(token, timer);
+      if (room.phase === PHASE.ROUND_PLAYING && allGuessed(room)) endRoundSoon(room);
+      broadcastState(room);
       return;
     }
-    if (wasHost) {
-      const next = room.players.values().next().value;
-      if (next) io.to(room.code).emit("newHost", { name: next.name }); // SAFE
-    }
-    if (room.players.size === 1 && (room.phase === PHASE.ROUND_PLAYING || room.phase === PHASE.ROUND_REVEAL)) {
-      io.to(room.code).emit("waitingForPlayers", {}); // SAFE
-    }
-    if (room.phase === PHASE.ROUND_PLAYING && allGuessed(room)) endRoundSoon(room);
-    broadcastState(room);
+    finalizeLeave(room, socket.id);
   });
 });
 

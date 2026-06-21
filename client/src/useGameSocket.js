@@ -13,6 +13,32 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io } from "socket.io-client";
 
+// Per-tab session so a refresh or a dropped connection can rejoin the same room
+// (with score intact) using the server-issued token. sessionStorage, not local,
+// so it's scoped to this tab and clears when the tab closes.
+const SESSION_KEY = "snippet.session";
+function loadSession() {
+  try {
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+function saveSession(s) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  } catch {
+    /* storage blocked — rejoin just won't persist */
+  }
+}
+function clearSession() {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function useGameSocket() {
   const socketRef = useRef(null);
 
@@ -43,14 +69,22 @@ export function useGameSocket() {
     socket.on("connect", () => {
       setConnected(true);
       setMyId(socket.id);
+      // If this tab was already in a room (refresh / dropped connection), try to
+      // reclaim the held slot before anything else.
+      const s = loadSession();
+      if (s && s.code && s.token) socket.emit("rejoin", { code: s.code, token: s.token });
     });
     socket.on("disconnect", () => setConnected(false));
 
-    // Server confirms our room + identity.
-    socket.on("roomJoined", ({ code, id }) => {
+    // Server confirms our room + identity (and a rejoin token to persist).
+    socket.on("roomJoined", ({ code, id, token }) => {
       setMyId(id);
       setRoomCode(code);
+      if (token) saveSession({ code, token });
     });
+
+    // The held slot was gone (room closed, grace expired) — forget the session.
+    socket.on("rejoinFailed", () => clearSession());
 
     // The authoritative state snapshot. Receiving any state ends a loading
     // screen, and entering a fresh round clears the previous reveal.
@@ -95,7 +129,9 @@ export function useGameSocket() {
     });
 
     // Room membership notices (Feature 5) -> bottom toast.
-    socket.on("playerLeft", (d) => setNotice(`${d?.name || "A player"} left`));
+    socket.on("playerLeft", (d) =>
+      setNotice(d?.held ? `${d?.name || "A player"} dropped — can rejoin` : `${d?.name || "A player"} left`)
+    );
     socket.on("newHost", (d) => setNotice(`${d?.name || "Someone"} is now host`));
     socket.on("waitingForPlayers", () => setNotice("Waiting for more players…"));
 
@@ -125,6 +161,10 @@ export function useGameSocket() {
     (code, name, idToken) => socketRef.current?.emit("joinRoom", { code, name, idToken }),
     []
   );
+  const quickPlay = useCallback(
+    (name, idToken) => socketRef.current?.emit("quickPlay", { name, idToken }),
+    []
+  );
   // settings = { genre, rounds, roundMs, optionsCount, mode, decade }. The server
   // validates/clamps every field; the client only requests.
   const start = useCallback((settings) => socketRef.current?.emit("startGame", settings || {}), []);
@@ -151,6 +191,7 @@ export function useGameSocket() {
     roomCode,
     createRoom,
     joinRoom,
+    quickPlay,
     start,
     guess,
     restart,

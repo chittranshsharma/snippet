@@ -77,7 +77,7 @@ const OPT_COLORS = [
 export default function App() {
   const {
     connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown, notice,
-    messages, reactions, roomCode, createRoom, joinRoom, start, guess, restart,
+    messages, reactions, roomCode, createRoom, joinRoom, quickPlay, start, guess, restart,
     sendChat, sendReaction, clearError, clearNotice,
   } = useGameSocket();
 
@@ -112,6 +112,10 @@ export default function App() {
     primeAudio();
     joinRoom(code, name, idToken);
   };
+  const handleQuick = (name, idToken) => {
+    primeAudio();
+    quickPlay(name, idToken);
+  };
   const handleStart = (settings) => {
     primeAudio();
     start(settings);
@@ -121,8 +125,10 @@ export default function App() {
   const players = state?.players ?? [];
   const me = players.find((p) => p.id === myId) || null;
   const joined = Boolean(me);
-  // No host concept on the server: treat the first player in the list as host.
-  const isHost = players.length > 0 && players[0].id === myId;
+  const isSpectator = Boolean(me?.spectator);
+  // Host = the first non-spectator player (mirrors the server's host rule).
+  const firstPlayer = players.find((p) => !p.spectator) || null;
+  const isHost = Boolean(firstPlayer && firstPlayer.id === myId);
 
   // Our own guess for the round (our choice — NOT the answer). Reset each round.
   const [myGuess, setMyGuess] = useState(null);
@@ -173,7 +179,7 @@ export default function App() {
           {!connected ? (
             <Centered eyebrow="Status" title="Connecting…" />
           ) : !joined ? (
-            <EntryScreen onCreate={handleCreate} onJoin={handleJoinRoom} />
+            <EntryScreen onCreate={handleCreate} onJoin={handleJoinRoom} onQuick={handleQuick} />
           ) : phase === "LOBBY" ? (
             <Lobby
               players={players}
@@ -190,6 +196,7 @@ export default function App() {
               roundMeta={roundMeta}
               myGuess={myGuess}
               hasGuessed={Boolean(myGuess) || Boolean(me?.hasGuessed)}
+              spectator={isSpectator}
               onGuess={handleGuess}
               onReact={sendReaction}
               audioRef={audioRef}
@@ -240,7 +247,7 @@ function Masthead({ phase, round, total }) {
 }
 
 // ---------- Entry: sign in (Google or guest), create or join a room ----------
-function EntryScreen({ onCreate, onJoin }) {
+function EntryScreen({ onCreate, onJoin, onQuick }) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
   const [name, setName] = useState("");
   const [code, setCode] = useState(() => {
@@ -304,6 +311,14 @@ function EntryScreen({ onCreate, onJoin }) {
         className={`${BTN_AMBER} w-full`}
       >
         ▶ Create Room
+      </button>
+
+      <button
+        onClick={() => canPlay && onQuick(identityName, idToken)}
+        disabled={!canPlay}
+        className={`${BTN_GHOST} w-full`}
+      >
+        ▶ Quick Play · public match
       </button>
 
       <div>
@@ -508,7 +523,8 @@ function SettingRow({ label, options, value, onChange }) {
 }
 
 // ---------- Playing ----------
-function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, onReact, audioRef }) {
+function Playing({ state, roundMeta, myGuess, hasGuessed, spectator, onGuess, onReact, audioRef }) {
+  const locked = hasGuessed || spectator; // spectators can't answer
   const startRef = useRef(() => {});
   const [needsTap, setNeedsTap] = useState(false);
   const [audioError, setAudioError] = useState(false);
@@ -569,16 +585,16 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, onReact, audi
     el.play().then(() => setNeedsTap(false)).catch(() => setNeedsTap(true));
   };
 
-  // Arcade keys 1-4 to answer (also an a11y win). Guard once-guessed.
+  // Arcade keys 1-4 to answer (also an a11y win). Guard once-guessed/spectator.
   useEffect(() => {
-    if (hasGuessed) return;
+    if (locked) return;
     const onKey = (e) => {
       const i = parseInt(e.key, 10);
       if (i >= 1 && i <= (state.options?.length ?? 0)) onGuess(state.options[i - 1]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hasGuessed, state.options, onGuess]);
+  }, [locked, state.options, onGuess]);
 
   const seconds = useCountdown(state.timeRemainingMs, state.round);
 
@@ -618,13 +634,13 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, onReact, audi
       <div className="grid gap-3">
         {state.options.map((opt, i) => {
           const selected = myGuess === opt;
-          const dimmed = hasGuessed && !selected; // lock animation
+          const dimmed = locked && !selected; // lock animation
           const c = OPT_COLORS[i % OPT_COLORS.length];
           return (
             <div key={opt}>
               <button
                 onClick={() => onGuess(opt)}
-                disabled={hasGuessed}
+                disabled={locked}
                 className={[
                   "flex w-full items-center gap-4 border px-4 py-4 text-left font-console text-sm uppercase tracking-wide text-bone transition-all",
                   selected ? `ring-2 ${c.sel}` : `border-rule bg-cabinet ${c.hov}`,
@@ -643,11 +659,15 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, onReact, audi
         })}
       </div>
 
-      {!hasGuessed && (
-        <p className={`${EYEBROW} text-center`}>
-          {isArtist ? "Pick the artist" : "Pick the track"} — faster = more points · keys 1-
-          {state.options.length}
-        </p>
+      {spectator ? (
+        <p className={`${EYEBROW} text-center text-cyan`}>Spectating — you can watch and react, but not guess</p>
+      ) : (
+        !hasGuessed && (
+          <p className={`${EYEBROW} text-center`}>
+            {isArtist ? "Pick the artist" : "Pick the track"} — faster = more points · keys 1-
+            {state.options.length}
+          </p>
+        )
       )}
 
       <ReactionBar onReact={onReact} />
