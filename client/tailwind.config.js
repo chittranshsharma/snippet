@@ -38,12 +38,18 @@ export default {
           from: { transform: "translateY(8px)", opacity: "0" },
           to: { transform: "none", opacity: "1" },
         },
+        floatup: {
+          "0%": { transform: "translateY(0) scale(.8)", opacity: "0" },
+          "15%": { transform: "translateY(-10px) scale(1)", opacity: "1" },
+          "100%": { transform: "translateY(-120px) scale(1)", opacity: "0" },
+        },
       },
       animation: {
         blink: "blink 1s step-end infinite",
         flicker: "flicker 4s steps(1) infinite",
         scoreroll: "scoreroll 240ms cubic-bezier(.16,1,.3,1) both",
         rise: "rise 240ms cubic-bezier(.16,1,.3,1) both",
+        floatup: "floatup 1.6s ease-out forwards",
       },
     },
   },

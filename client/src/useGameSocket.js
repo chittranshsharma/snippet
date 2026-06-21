@@ -27,6 +27,9 @@ export function useGameSocket() {
   const [roundMeta, setRoundMeta] = useState(null); // { questionValue, maxSpeedBonus, roundIndex }
   const [countdown, setCountdown] = useState(null); // { seconds, round } during the 3-2-1
   const [notice, setNotice] = useState(null); // transient bottom toast (player left, new host)
+  const [messages, setMessages] = useState([]); // room chat log (capped)
+  const [reactions, setReactions] = useState([]); // ephemeral floated call-outs
+  const seqRef = useRef(0); // monotonic id for stable React keys
 
   useEffect(() => {
     // In dev, Vite proxies /socket.io to the server on :3000 (same origin). In
@@ -76,6 +79,21 @@ export function useGameSocket() {
       setLoading(null);
     });
 
+    // Chat: append (cap to the last 60 messages to bound memory).
+    socket.on("chat", (m) => {
+      const id = ++seqRef.current;
+      setMessages((prev) => [...prev, { ...m, key: id }].slice(-60));
+    });
+
+    // Reactions: ephemeral floated call-outs. Each gets a unique key and is
+    // auto-removed after its float animation (~1.6s).
+    socket.on("reaction", (r) => {
+      const key = ++seqRef.current;
+      const lane = key % 5; // spread horizontally so simultaneous reacts don't stack
+      setReactions((prev) => [...prev, { ...r, key, lane }]);
+      setTimeout(() => setReactions((prev) => prev.filter((x) => x.key !== key)), 1600);
+    });
+
     // Room membership notices (Feature 5) -> bottom toast.
     socket.on("playerLeft", (d) => setNotice(`${d?.name || "A player"} left`));
     socket.on("newHost", (d) => setNotice(`${d?.name || "Someone"} is now host`));
@@ -112,6 +130,8 @@ export function useGameSocket() {
   const start = useCallback((settings) => socketRef.current?.emit("startGame", settings || {}), []);
   const guess = useCallback((option) => socketRef.current?.emit("guess", { option }), []);
   const restart = useCallback(() => socketRef.current?.emit("restart"), []);
+  const sendChat = useCallback((text) => socketRef.current?.emit("chat", { text }), []);
+  const sendReaction = useCallback((token) => socketRef.current?.emit("react", { token }), []);
   const clearError = useCallback(() => setError(null), []);
   const clearNotice = useCallback(() => setNotice(null), []);
 
@@ -126,12 +146,16 @@ export function useGameSocket() {
     roundMeta,
     countdown,
     notice,
+    messages,
+    reactions,
     roomCode,
     createRoom,
     joinRoom,
     start,
     guess,
     restart,
+    sendChat,
+    sendReaction,
     clearError,
     clearNotice,
   };

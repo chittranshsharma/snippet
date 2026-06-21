@@ -9,6 +9,7 @@ import http from "node:http";
 import { Server } from "socket.io";
 import { fetchSongs } from "./itunesFetcher.js";
 import { OAuth2Client } from "google-auth-library";
+import { maskProfanity } from "./profanity.js";
 
 // ----- Configuration -----
 const PORT = process.env.PORT || 3000;
@@ -32,6 +33,11 @@ const TIMER_CHOICES = [10000, 7500, 15000]; // round length in ms
 const OPTION_CHOICES = [4, 3, 6]; // answers shown per round
 const MODE_CHOICES = ["TITLE", "ARTIST"]; // guess the song title or the artist
 const DECADE_CHOICES = ["all", "2020s", "2010s", "2000s", "1990s"];
+
+// Chat + reactions. Reactions are a fixed whitelist of arcade-style call-outs
+// (typographic, not emoji — keeps the §12 design rule) floated over the game.
+const REACTIONS = ["GG", "WOW", "!!", "??", "★", "♥"];
+const CHAT_MAX_LEN = 200;
 
 const DEFAULT_SETTINGS = {
   rounds: ROUND_CHOICES[0],
@@ -120,6 +126,7 @@ function makePlayer(id, name) {
     google: false,
     email: null, // SERVER-ONLY, never broadcast
     sub: null, // SERVER-ONLY Google subject id
+    picture: null, // public Google avatar URL (safe to broadcast), or null
     score: 0,
     streak: 0,
     hasGuessed: false,
@@ -138,14 +145,31 @@ function deleteRoom(room) {
   rooms.delete(room.code);
 }
 
+// Per-socket sliding-window rate limiter. Returns true if the action should be
+// DROPPED (limit exceeded). Used for chat/reactions/connection abuse.
+function rateLimited(socket, key, max, windowMs) {
+  const now = Date.now();
+  socket.data.rl = socket.data.rl || {};
+  const hits = (socket.data.rl[key] || []).filter((t) => now - t < windowMs);
+  if (hits.length >= max) {
+    socket.data.rl[key] = hits;
+    return true;
+  }
+  hits.push(now);
+  socket.data.rl[key] = hits;
+  return false;
+}
+
 // ----- Pure helpers (room-independent) -----
 
-// S2 (sanitize): allow letters, digits, space, underscore, and hyphen only.
+// S2 (sanitize): allow letters, digits, space, underscore, and hyphen only,
+// then mask any profanity in guest handles.
 function cleanName(raw) {
-  return String(raw ?? "")
+  const cleaned = String(raw ?? "")
     .replace(/[^a-zA-Z0-9 _\-]/g, "")
     .trim()
     .slice(0, 20);
+  return maskProfanity(cleaned);
 }
 
 // Resolve identity from a create/join payload. With a Google ID token (and
@@ -159,7 +183,8 @@ async function resolveIdentity(payload) {
       const p = ticket.getPayload();
       const name = cleanName(p.name || p.given_name || (p.email ? p.email.split("@")[0] : ""));
       if (!name) return { error: "Could not read your Google name." };
-      return { name, google: true, sub: p.sub, email: p.email || null };
+      const picture = typeof p.picture === "string" && p.picture.startsWith("https://") ? p.picture : null;
+      return { name, google: true, sub: p.sub, email: p.email || null, picture };
     } catch {
       return { error: "Google sign-in failed. Try again." };
     }
@@ -271,6 +296,7 @@ function publicState(room) {
       id: p.id,
       name: p.name,
       google: p.google, // verified badge only; email/sub never leave the server
+      avatar: p.picture, // public Google photo URL or null (guests render an initial)
       score: p.score,
       hasGuessed: p.hasGuessed,
       lastRoundScore: p.lastRoundScore,
@@ -527,6 +553,7 @@ io.on("connection", (socket) => {
       player.google = id.google;
       player.email = id.email || null;
       player.sub = id.sub || null;
+      player.picture = id.picture || null;
       room.players.set(socket.id, player);
       socket.emit("roomJoined", { code, id: socket.id }); // SAFE
       broadcastState(room);
@@ -566,6 +593,7 @@ io.on("connection", (socket) => {
       player.google = id.google;
       player.email = id.email || null;
       player.sub = id.sub || null;
+      player.picture = id.picture || null;
       room.players.set(socket.id, player);
       socket.emit("roomJoined", { code, id: socket.id }); // SAFE
       broadcastState(room);
@@ -664,6 +692,34 @@ io.on("connection", (socket) => {
     }
     resetToLobby(room);
     broadcastState(room);
+  });
+
+  // --- chat: room-scoped messages, rate-limited, sanitized, profanity-masked ---
+  socket.on("chat", (payload) => {
+    const room = roomOf(socket);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    if (rateLimited(socket, "chat", 5, 5000)) return; // drop quietly when flooding
+    let text = String((payload && payload.text) ?? "")
+      .replace(/[\x00-\x1F\x7F]/g, "") // strip control chars
+      .trim()
+      .slice(0, CHAT_MAX_LEN);
+    if (!text) return;
+    text = maskProfanity(text);
+    io.to(room.code).emit("chat", { id: socket.id, name: player.name, text, ts: Date.now() }); // SAFE
+  });
+
+  // --- react: floated arcade call-out from the whitelist, rate-limited ---
+  socket.on("react", (payload) => {
+    const room = roomOf(socket);
+    if (!room) return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    if (rateLimited(socket, "react", 8, 5000)) return;
+    const token = String((payload && payload.token) ?? "");
+    if (!REACTIONS.includes(token)) return;
+    io.to(room.code).emit("reaction", { id: socket.id, name: player.name, token, ts: Date.now() }); // SAFE
   });
 
   // --- disconnect ---

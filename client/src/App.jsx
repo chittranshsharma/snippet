@@ -32,6 +32,10 @@ const MAX_SPEED_BONUS = 350;
 // Genre options the host can pick before starting (Feature 1).
 const GENRES = ["HIP-HOP", "R&B", "RAP", "DRILL", "TRAP"];
 
+// Reaction call-outs (must match the server's REACTIONS whitelist). Typographic,
+// not emoji — keeps the §12 design rule while still being expressive.
+const REACTION_TOKENS = ["GG", "WOW", "!!", "??", "★", "♥"];
+
 // Host-configurable match settings. Each option is { label, value } and the
 // value is sent to the server, which re-validates against its own allowlist.
 const ROUND_OPTS = [
@@ -73,7 +77,8 @@ const OPT_COLORS = [
 export default function App() {
   const {
     connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown, notice,
-    roomCode, createRoom, joinRoom, start, guess, restart, clearError, clearNotice,
+    messages, reactions, roomCode, createRoom, joinRoom, start, guess, restart,
+    sendChat, sendReaction, clearError, clearNotice,
   } = useGameSocket();
 
   // --- Mobile audio unlock (priming) ---------------------------------------
@@ -159,6 +164,7 @@ export default function App() {
         />
       )}
       {notice && <Toast message={notice} />}
+      <ReactionOverlay reactions={reactions} />
 
       <div className="mx-auto flex min-h-screen max-w-xl flex-col px-5 pt-6 pb-8">
         <Masthead phase={phase} round={round} total={state?.totalRounds} />
@@ -169,7 +175,15 @@ export default function App() {
           ) : !joined ? (
             <EntryScreen onCreate={handleCreate} onJoin={handleJoinRoom} />
           ) : phase === "LOBBY" ? (
-            <Lobby players={players} myId={myId} isHost={isHost} onStart={handleStart} code={roomCode} />
+            <Lobby
+              players={players}
+              myId={myId}
+              isHost={isHost}
+              onStart={handleStart}
+              code={roomCode}
+              messages={messages}
+              onChat={sendChat}
+            />
           ) : phase === "ROUND_PLAYING" ? (
             <Playing
               state={state}
@@ -177,12 +191,20 @@ export default function App() {
               myGuess={myGuess}
               hasGuessed={Boolean(myGuess) || Boolean(me?.hasGuessed)}
               onGuess={handleGuess}
+              onReact={sendReaction}
               audioRef={audioRef}
             />
           ) : phase === "ROUND_REVEAL" ? (
-            <Reveal reveal={reveal} myId={myId} />
+            <Reveal reveal={reveal} myId={myId} onReact={sendReaction} players={players} />
           ) : phase === "GAME_OVER" ? (
-            <GameOver gameOver={gameOver} players={players} onRestart={restart} />
+            <GameOver
+              gameOver={gameOver}
+              players={players}
+              myId={myId}
+              onRestart={restart}
+              messages={messages}
+              onChat={sendChat}
+            />
           ) : null}
         </main>
 
@@ -347,7 +369,7 @@ function GoogleSignIn({ clientId, onSignIn }) {
 }
 
 // ---------- Lobby ----------
-function Lobby({ players, myId, isHost, onStart, code }) {
+function Lobby({ players, myId, isHost, onStart, code, messages, onChat }) {
   const [copied, setCopied] = useState(false);
   const [genre, setGenre] = useState("HIP-HOP");
   // Match settings (host only). Defaults mirror the server's DEFAULT_SETTINGS.
@@ -382,11 +404,12 @@ function Lobby({ players, myId, isHost, onStart, code }) {
               key={p.id}
               className={`flex items-center justify-between px-4 py-3 ${i % 2 ? "bg-void/40" : ""}`}
             >
-              <span className="flex items-center gap-3">
+              <span className="flex min-w-0 items-center gap-3">
+                <Avatar name={p.name} src={p.avatar} />
                 <span className="font-console text-xs text-cyan">{i + 1}UP</span>
-                <span className="font-console uppercase tracking-wide text-bone">{p.name}</span>
+                <span className="truncate font-console uppercase tracking-wide text-bone">{p.name}</span>
                 {p.google && (
-                  <span className="text-good" title="Google verified" aria-label="verified">
+                  <span className="shrink-0 text-good" title="Google verified" aria-label="verified">
                     ✓
                   </span>
                 )}
@@ -450,6 +473,8 @@ function Lobby({ players, myId, isHost, onStart, code }) {
           <span className="animate-blink text-amber">▍</span> Waiting for host
         </p>
       )}
+
+      <Chat messages={messages} onChat={onChat} myId={myId} title="Lobby chat" />
     </div>
   );
 }
@@ -483,7 +508,7 @@ function SettingRow({ label, options, value, onChange }) {
 }
 
 // ---------- Playing ----------
-function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
+function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, onReact, audioRef }) {
   const startRef = useRef(() => {});
   const [needsTap, setNeedsTap] = useState(false);
   const [audioError, setAudioError] = useState(false);
@@ -624,15 +649,19 @@ function Playing({ state, roundMeta, myGuess, hasGuessed, onGuess, audioRef }) {
           {state.options.length}
         </p>
       )}
+
+      <ReactionBar onReact={onReact} />
     </div>
   );
 }
 
 // ---------- Reveal ----------
-function Reveal({ reveal, myId }) {
+function Reveal({ reveal, myId, onReact, players }) {
   const results = reveal?.results ?? [];
   const winner = reveal?.roundWinner ?? null; // fastest correct answer, or null
   const round = reveal?.round ?? 0;
+  const avatarOf = {};
+  for (const p of players ?? []) avatarOf[p.id] = p.avatar;
   const total = reveal?.totalRounds ?? 10;
   const track = reveal?.track ?? null; // { trackName, artistName } — always shown
   const isArtist = reveal?.mode === "ARTIST";
@@ -703,6 +732,7 @@ function Reveal({ reveal, myId }) {
               >
                 <span className="flex min-w-0 items-center gap-3">
                   <StatusDot correct={r.correct} answered={answered} />
+                  <Avatar name={r.name} src={avatarOf[r.id]} size={22} />
                   <span className="truncate font-console uppercase tracking-wide text-bone">{r.name}</span>
                   {r.streakBonus > 0 && (
                     <span className="shrink-0 font-console text-[10px] uppercase tracking-wide text-amber">
@@ -721,6 +751,8 @@ function Reveal({ reveal, myId }) {
       </div>
 
       <Leaderboard rows={leaderboard} myId={myId} title="Leaderboard" />
+
+      <ReactionBar onReact={onReact} />
     </div>
   );
 }
@@ -737,13 +769,15 @@ function StatusDot({ correct, answered }) {
 }
 
 // ---------- Game Over ----------
-function GameOver({ gameOver, players, onRestart }) {
+function GameOver({ gameOver, players, myId, onRestart, messages, onChat }) {
   const rows =
     gameOver?.leaderboard ??
     [...players].sort((a, b) => b.score - a.score).map((p, i) => ({ rank: i + 1, ...p }));
   const champ = rows[0];
   const rest = rows.slice(1);
   const history = gameOver?.roundHistory ?? null;
+  const avatarOf = {};
+  for (const p of players ?? []) avatarOf[p.id] = p.avatar;
 
   return (
     <div className="space-y-8">
@@ -754,7 +788,10 @@ function GameOver({ gameOver, players, onRestart }) {
       {champ && (
         <div className="border border-amber/50 bg-amber/5 px-6 py-6 text-center shadow-[0_0_36px_-12px_#FFC93C]">
           <p className="font-coin text-xs text-amber">1UP · Champion</p>
-          <p className="mt-3 font-console uppercase tracking-wide text-bone">{champ.name}</p>
+          <div className="mt-3 flex items-center justify-center gap-3">
+            <Avatar name={champ.name} src={avatarOf[champ.id]} size={32} />
+            <p className="font-console uppercase tracking-wide text-bone">{champ.name}</p>
+          </div>
           <p className="mt-1 animate-scoreroll font-marquee text-4xl font-black tabular-nums text-amber">
             {champ.score}
           </p>
@@ -779,6 +816,8 @@ function GameOver({ gameOver, players, onRestart }) {
       )}
 
       {history && history.length > 0 && <RoundHistory history={history} />}
+
+      <Chat messages={messages} onChat={onChat} myId={myId} title="Chat" />
 
       <button onClick={onRestart} className={`${BTN_AMBER} w-full`}>
         ↻ Play again
@@ -844,6 +883,127 @@ function Leaderboard({ rows, myId, title }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+// Square arcade-portrait avatar (zero radius, per the design rules). Falls back
+// to the player's initial when there's no Google photo or it fails to load.
+function Avatar({ name, src, size = 26 }) {
+  const [broken, setBroken] = useState(false);
+  const initial = ((name || "?").trim().charAt(0) || "?").toUpperCase();
+  const px = `${size}px`;
+  if (src && !broken) {
+    return (
+      <img
+        src={src}
+        alt=""
+        onError={() => setBroken(true)}
+        style={{ width: px, height: px }}
+        className="shrink-0 border border-rule object-cover"
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden="true"
+      style={{ width: px, height: px }}
+      className="grid shrink-0 place-items-center border border-rule bg-void font-console text-[10px] text-dim"
+    >
+      {initial}
+    </span>
+  );
+}
+
+// Room chat — used in the lobby and on game over. Rate-limited + masked server
+// side; the client just renders.
+function Chat({ messages, onChat, myId, title = "Chat" }) {
+  const [text, setText] = useState("");
+  const listRef = useRef(null);
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+  const submit = (e) => {
+    e.preventDefault();
+    const t = text.trim();
+    if (!t) return;
+    onChat(t);
+    setText("");
+  };
+  return (
+    <div>
+      <p className={EYEBROW}>{title}</p>
+      <div className={`mt-3 ${PANEL}`}>
+        <div ref={listRef} className="max-h-40 space-y-1.5 overflow-y-auto px-4 py-3" aria-live="polite">
+          {messages.length === 0 ? (
+            <p className="font-console text-xs text-dim">No messages yet. Say hi.</p>
+          ) : (
+            messages.map((m) => (
+              <p key={m.key} className="font-console text-xs leading-snug">
+                <span className={m.id === myId ? "text-pink" : "text-cyan"}>{m.name}</span>
+                <span className="text-dim"> · </span>
+                <span className="break-words text-bone">{m.text}</span>
+              </p>
+            ))
+          )}
+        </div>
+        <form onSubmit={submit} className="flex border-t border-rule">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            maxLength={200}
+            placeholder="Message…"
+            aria-label="Chat message"
+            className="w-full bg-transparent px-4 py-2.5 font-console text-xs text-bone placeholder:text-dim focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="border-l border-rule px-4 font-console text-xs uppercase tracking-[0.2em] text-dim transition-colors hover:text-pink"
+          >
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// The 6 reaction call-outs. Tapping floats one over everyone's screen.
+function ReactionBar({ onReact }) {
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-2">
+      {REACTION_TOKENS.map((t) => (
+        <button
+          key={t}
+          onClick={() => onReact(t)}
+          aria-label={`React ${t}`}
+          className="min-w-[2.5rem] border border-rule bg-cabinet px-2 py-1.5 font-console text-xs text-dim transition-[transform,color,border-color] hover:border-amber hover:text-amber active:scale-95"
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Full-screen, non-interactive layer that floats incoming reactions upward.
+function ReactionOverlay({ reactions }) {
+  if (!reactions || reactions.length === 0) return null;
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[55] overflow-hidden">
+      {reactions.map((r) => (
+        <div
+          key={r.key}
+          className="absolute bottom-24 animate-floatup whitespace-nowrap font-marquee text-3xl font-black text-amber phosphor"
+          style={{ left: `${12 + (r.lane ?? 0) * 18}%` }}
+        >
+          {r.token}
+          <span className="ml-1 align-middle font-console text-[10px] uppercase tracking-wide text-dim">
+            {r.name}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
