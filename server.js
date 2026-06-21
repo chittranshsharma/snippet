@@ -356,6 +356,13 @@ function endRound() {
     ? { name: fastest.name, answerTimeSeconds: fastest.answerTimeSeconds }
     : null;
 
+  // Record this round for the end-of-game recap (Feature 6).
+  room.history.push({
+    trackName: correctName,
+    artistName: room.correctArtist,
+    winner: roundWinner ? roundWinner.name : null,
+  });
+
   const leaderboard = [...players.values()]
     .sort((a, b) => b.score - a.score)
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
@@ -395,7 +402,7 @@ function gameOver() {
     .sort((a, b) => b.score - a.score)
     .map((p, i) => ({ rank: i + 1, id: p.id, name: p.name, score: p.score }));
 
-  io.emit("gameOver", { leaderboard });
+  io.emit("gameOver", { leaderboard, roundHistory: room.history }); // SAFE: round over
   broadcastState();
 }
 
@@ -498,6 +505,7 @@ io.on("connection", (socket) => {
 
     room.pool = pool;
     room.usedTrackIds = new Set();
+    room.history = [];
     // Reset scores + streaks for a clean game.
     for (const p of players.values()) {
       p.score = 0;
