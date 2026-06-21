@@ -174,6 +174,19 @@ export function useGameSocket() {
   const sendReaction = useCallback((token) => socketRef.current?.emit("react", { token }), []);
   const clearError = useCallback(() => setError(null), []);
   const clearNotice = useCallback(() => setNotice(null), []);
+  const leaveRoom = useCallback(() => {
+    clearSession();
+    socketRef.current?.disconnect();
+    setRoomCode(null);
+    setState(null);
+    setReveal(null);
+    setGameOver(null);
+    setMessages([]);
+    setReactions([]);
+    setCountdown(null);
+    setRoundMeta(null);
+    socketRef.current?.connect();
+  }, []);
 
   return {
     connected,
@@ -199,5 +212,6 @@ export function useGameSocket() {
     sendReaction,
     clearError,
     clearNotice,
+    leaveRoom,
   };
 }

@@ -97,7 +97,7 @@ export default function App() {
   const {
     connected, myId, state, reveal, gameOver, loading, error, roundMeta, countdown, notice,
     messages, reactions, roomCode, createRoom, joinRoom, quickPlay, start, guess, restart,
-    sendChat, sendReaction, clearError, clearNotice,
+    sendChat, sendReaction, clearError, clearNotice, leaveRoom,
   } = useGameSocket();
 
   // --- Mobile audio unlock (priming) ---------------------------------------
@@ -192,9 +192,36 @@ export default function App() {
     if (phase === "LOBBY") myCorrectRef.current = 0;
   }, [phase]);
 
+  const handleLeave = () => {
+    if (joined) {
+      if (phase !== "LOBBY" && phase !== "GAME_OVER") {
+        if (!window.confirm("Leave this active game?")) return;
+      }
+      leaveRoom();
+    }
+    setView("home");
+  };
+
+  const handleNavigate = (targetView) => {
+    if (joined) {
+      if (phase !== "LOBBY" && phase !== "GAME_OVER") {
+        if (!window.confirm("Leave this active game?")) return;
+      }
+      leaveRoom();
+    }
+    setView(targetView);
+    setMenuOpen(false);
+  };
+
   // Route into the room flow from a Home game card.
   const openGame = (game) => {
     if (!game || game.status !== "play") return;
+    if (joined) {
+      if (phase !== "LOBBY" && phase !== "GAME_OVER") {
+        if (!window.confirm("Leave this active game?")) return;
+      }
+      leaveRoom();
+    }
     setClipPref(game.clip || "RANDOM");
     setView("play");
     setMenuOpen(false);
@@ -277,15 +304,9 @@ export default function App() {
         <SideMenu
           games={GAMES}
           onClose={() => setMenuOpen(false)}
-          onHome={() => {
-            setView("home");
-            setMenuOpen(false);
-          }}
+          onHome={() => handleNavigate("home")}
           onOpen={openGame}
-          onProfile={() => {
-            setView("profile");
-            setMenuOpen(false);
-          }}
+          onProfile={() => handleNavigate("profile")}
         />
       )}
 
@@ -294,8 +315,8 @@ export default function App() {
           phase={phase}
           round={round}
           total={state?.totalRounds}
-          onMenu={joined ? null : () => setMenuOpen(true)}
-          onBrand={joined ? null : () => setView("home")}
+          onMenu={() => setMenuOpen(true)}
+          onBrand={handleLeave}
         />
 
         <main className="flex flex-1 flex-col justify-start py-8">
@@ -323,6 +344,7 @@ export default function App() {
               messages={messages}
               onChat={sendChat}
               clipPref={clipPref}
+              onLeave={handleLeave}
             />
           ) : phase === "ROUND_PLAYING" ? (
             <Playing
@@ -809,7 +831,7 @@ function GoogleSignIn({ clientId, onSignIn }) {
 }
 
 // ---------- Lobby ----------
-function Lobby({ players, myId, isHost, onStart, code, messages, onChat, clipPref }) {
+function Lobby({ players, myId, isHost, onStart, code, messages, onChat, clipPref, onLeave }) {
   const [copied, setCopied] = useState(false);
   const [genre, setGenre] = useState("HIP-HOP");
   // Match settings (host only). Defaults mirror the server's DEFAULT_SETTINGS;
@@ -916,6 +938,10 @@ function Lobby({ players, myId, isHost, onStart, code, messages, onChat, clipPre
           <span className="animate-blink text-amber">▍</span> Waiting for host
         </p>
       )}
+
+      <button onClick={onLeave} className={`${BTN_GHOST} w-full`}>
+        ✕ Leave Room
+      </button>
 
       <Chat messages={messages} onChat={onChat} myId={myId} title="Lobby chat" />
     </div>
