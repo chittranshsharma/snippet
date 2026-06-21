@@ -8,6 +8,7 @@
 import http from "node:http";
 import { Server } from "socket.io";
 import { fetchSongs } from "./itunesFetcher.js";
+import { OAuth2Client } from "google-auth-library";
 
 // ----- Configuration -----
 const PORT = process.env.PORT || 3000;
@@ -24,6 +25,11 @@ const QUESTION_BASE = 300;
 const QUESTION_STEP = 250;
 const MAX_SPEED_BONUS = 350;
 const ALLOWED_GENRES = ["hip-hop", "r&b", "rap", "drill", "trap"];
+
+// Google OAuth (optional). If GOOGLE_CLIENT_ID is unset, sign-in is disabled and
+// everyone plays as a guest.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const oauthClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 // ----- Game phases -----
 const PHASE = {
@@ -70,7 +76,18 @@ function makeRoom(code) {
 }
 
 function makePlayer(id, name) {
-  return { id, name, score: 0, streak: 0, hasGuessed: false, lastRoundScore: 0, lastCorrect: false };
+  return {
+    id,
+    name,
+    google: false,
+    email: null, // SERVER-ONLY, never broadcast
+    sub: null, // SERVER-ONLY Google subject id
+    score: 0,
+    streak: 0,
+    hasGuessed: false,
+    lastRoundScore: 0,
+    lastCorrect: false,
+  };
 }
 
 function roomOf(socket) {
@@ -91,6 +108,27 @@ function cleanName(raw) {
     .replace(/[^a-zA-Z0-9 _\-]/g, "")
     .trim()
     .slice(0, 20);
+}
+
+// Resolve identity from a create/join payload. With a Google ID token (and
+// GOOGLE_CLIENT_ID configured) the token is VERIFIED server-side and the Google
+// name is used; otherwise the typed handle is used as a guest.
+async function resolveIdentity(payload) {
+  const idToken = payload && payload.idToken;
+  if (idToken && oauthClient) {
+    try {
+      const ticket = await oauthClient.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID });
+      const p = ticket.getPayload();
+      const name = cleanName(p.name || p.given_name || (p.email ? p.email.split("@")[0] : ""));
+      if (!name) return { error: "Could not read your Google name." };
+      return { name, google: true, sub: p.sub, email: p.email || null };
+    } catch {
+      return { error: "Google sign-in failed. Try again." };
+    }
+  }
+  const name = cleanName(payload && payload.name);
+  if (!name) return { error: "Enter a valid handle." };
+  return { name, google: false };
 }
 
 function shuffle(list) {
@@ -179,6 +217,7 @@ function publicState(room) {
     players: [...room.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
+      google: p.google, // verified badge only; email/sub never leave the server
       score: p.score,
       hasGuessed: p.hasGuessed,
       lastRoundScore: p.lastRoundScore,
@@ -397,50 +436,70 @@ const io = new Server(httpServer, { cors: { origin: CLIENT_ORIGIN } });
 
 io.on("connection", (socket) => {
   // --- createRoom: open a new room and become host ---
-  socket.on("createRoom", (payload) => {
-    if (roomOf(socket)) return; // already in a room
-    const name = cleanName(payload && payload.name);
-    if (!name) {
-      socket.emit("errorMsg", { message: "Enter a valid handle." });
-      return;
+  socket.on("createRoom", async (payload) => {
+    if (socket.data.busy || roomOf(socket)) return;
+    socket.data.busy = true;
+    try {
+      const id = await resolveIdentity(payload);
+      if (id.error) {
+        socket.emit("errorMsg", { message: id.error });
+        return;
+      }
+      if (roomOf(socket)) return;
+      const code = makeCode();
+      const room = makeRoom(code);
+      rooms.set(code, room);
+      socket.join(code);
+      socket.data.roomCode = code;
+      const player = makePlayer(socket.id, id.name);
+      player.google = id.google;
+      player.email = id.email || null;
+      player.sub = id.sub || null;
+      room.players.set(socket.id, player);
+      socket.emit("roomJoined", { code, id: socket.id }); // SAFE
+      broadcastState(room);
+    } finally {
+      socket.data.busy = false;
     }
-    const code = makeCode();
-    const room = makeRoom(code);
-    rooms.set(code, room);
-    socket.join(code);
-    socket.data.roomCode = code;
-    room.players.set(socket.id, makePlayer(socket.id, name));
-    socket.emit("roomJoined", { code, id: socket.id }); // SAFE
-    broadcastState(room);
   });
 
   // --- joinRoom: join an existing room by code ---
-  socket.on("joinRoom", (payload) => {
-    if (roomOf(socket)) return;
-    const code = String((payload && payload.code) ?? "").toUpperCase().trim();
-    const room = rooms.get(code);
-    if (!room) {
-      socket.emit("errorMsg", { message: "Room not found." });
-      return;
+  socket.on("joinRoom", async (payload) => {
+    if (socket.data.busy || roomOf(socket)) return;
+    socket.data.busy = true;
+    try {
+      const code = String((payload && payload.code) ?? "").toUpperCase().trim();
+      const room = rooms.get(code);
+      if (!room) {
+        socket.emit("errorMsg", { message: "Room not found." });
+        return;
+      }
+      if (room.phase !== PHASE.LOBBY) {
+        socket.emit("errorMsg", { message: "Game already in progress." });
+        return;
+      }
+      if (room.players.size >= MAX_PLAYERS) {
+        socket.emit("errorMsg", { message: "Room is full." });
+        return;
+      }
+      const id = await resolveIdentity(payload);
+      if (id.error) {
+        socket.emit("errorMsg", { message: id.error });
+        return;
+      }
+      if (roomOf(socket)) return;
+      socket.join(code);
+      socket.data.roomCode = code;
+      const player = makePlayer(socket.id, id.name);
+      player.google = id.google;
+      player.email = id.email || null;
+      player.sub = id.sub || null;
+      room.players.set(socket.id, player);
+      socket.emit("roomJoined", { code, id: socket.id }); // SAFE
+      broadcastState(room);
+    } finally {
+      socket.data.busy = false;
     }
-    if (room.phase !== PHASE.LOBBY) {
-      socket.emit("errorMsg", { message: "Game already in progress." });
-      return;
-    }
-    if (room.players.size >= MAX_PLAYERS) {
-      socket.emit("errorMsg", { message: "Room is full." });
-      return;
-    }
-    const name = cleanName(payload && payload.name);
-    if (!name) {
-      socket.emit("errorMsg", { message: "Enter a valid handle." });
-      return;
-    }
-    socket.join(code);
-    socket.data.roomCode = code;
-    room.players.set(socket.id, makePlayer(socket.id, name));
-    socket.emit("roomJoined", { code, id: socket.id }); // SAFE
-    broadcastState(room);
   });
 
   // --- startGame: host starts round 1 (optional { genre }) ---

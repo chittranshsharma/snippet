@@ -52,9 +52,12 @@ first test, lock it down after.)
 
 ---
 
-## 4. Google OAuth (Phase 2 — wiring lands next)
+## 4. Google OAuth (wired — just add your client ID)
 
-In **Google Cloud Console → APIs & Services → Credentials**:
+The sign-in flow is implemented (Google Identity Services button → server-side
+ID-token verification). Without a client ID set it stays hidden and everyone
+plays as a guest. To enable it, in **Google Cloud Console → APIs & Services →
+Credentials**:
 
 1. **Create OAuth client ID → Web application**.
 2. **Authorized JavaScript origins**: your Vercel URL (and

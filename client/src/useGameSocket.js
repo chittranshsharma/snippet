@@ -99,8 +99,14 @@ export function useGameSocket() {
   }, []);
 
   // --- The only messages the client may send ---
-  const createRoom = useCallback((name) => socketRef.current?.emit("createRoom", { name }), []);
-  const joinRoom = useCallback((code, name) => socketRef.current?.emit("joinRoom", { code, name }), []);
+  const createRoom = useCallback(
+    (name, idToken) => socketRef.current?.emit("createRoom", { name, idToken }),
+    []
+  );
+  const joinRoom = useCallback(
+    (code, name, idToken) => socketRef.current?.emit("joinRoom", { code, name, idToken }),
+    []
+  );
   const start = useCallback((genre) => socketRef.current?.emit("startGame", { genre }), []);
   const guess = useCallback((option) => socketRef.current?.emit("guess", { option }), []);
   const restart = useCallback(() => socketRef.current?.emit("restart"), []);

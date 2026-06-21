@@ -7,7 +7,7 @@
 // IMPORTANT: this file is presentation only. The socket/data contract is
 // untouched — every prop, event, and server field is wired exactly as before.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useGameSocket } from "./useGameSocket";
 
 // ---- Shared class fragments (drive the look across every screen) ----
@@ -70,13 +70,13 @@ export default function App() {
     }
   };
 
-  const handleCreate = (name) => {
+  const handleCreate = (name, idToken) => {
     primeAudio();
-    createRoom(name);
+    createRoom(name, idToken);
   };
-  const handleJoinRoom = (code, name) => {
+  const handleJoinRoom = (code, name, idToken) => {
     primeAudio();
-    joinRoom(code, name);
+    joinRoom(code, name, idToken);
   };
   const handleStart = (genre) => {
     primeAudio();
@@ -188,38 +188,68 @@ function Masthead({ phase, round, total }) {
   );
 }
 
-// ---------- Entry: create or join a room ----------
+// ---------- Entry: sign in (Google or guest), create or join a room ----------
 function EntryScreen({ onCreate, onJoin }) {
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
   const [name, setName] = useState("");
   const [code, setCode] = useState(() => {
     if (typeof window === "undefined") return "";
     return (new URLSearchParams(window.location.search).get("room") || "").toUpperCase().slice(0, 4);
   });
-  const canName = name.trim().length > 0;
+  const [googleCred, setGoogleCred] = useState(null); // { name, idToken }
+  const onSignIn = useCallback((c) => setGoogleCred(c), []);
+
+  const identityName = googleCred ? googleCred.name : name.trim();
+  const idToken = googleCred ? googleCred.idToken : undefined;
+  const canPlay = identityName.length > 0;
+
   return (
-    <div className="mx-auto w-full max-w-sm animate-rise space-y-7">
+    <div className="mx-auto w-full max-w-sm animate-rise space-y-6">
       <div>
         <p className="font-coin text-base leading-relaxed text-pink">INSERT COIN</p>
         <div className="mt-3 h-px w-24 bg-rule" />
-        <p className="mt-4 font-console text-sm text-dim">Pick a handle, then start or join a room.</p>
+        <p className="mt-4 font-console text-sm text-dim">
+          Sign in or play as a guest, then create or join a room.
+        </p>
       </div>
 
-      <div className="flex items-center border-b-2 border-rule focus-within:border-pink">
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={20}
-          placeholder="YOUR HANDLE"
-          aria-label="Your handle"
-          className="w-full bg-transparent px-1 py-3 font-console text-lg uppercase tracking-widest text-bone placeholder:text-dim focus:outline-none"
-        />
-        {name.length === 0 && <span className="mr-1 h-5 w-2 animate-blink bg-pink" aria-hidden="true" />}
-      </div>
+      {clientId &&
+        (googleCred ? (
+          <div className={`${PANEL} flex items-center justify-between px-4 py-3`}>
+            <span className="min-w-0 truncate font-console text-sm text-bone">
+              Signed in · <span className="text-good">{googleCred.name}</span>
+            </span>
+            <button
+              onClick={() => setGoogleCred(null)}
+              className="shrink-0 font-console text-xs uppercase tracking-[0.2em] text-dim hover:text-pink"
+            >
+              Switch
+            </button>
+          </div>
+        ) : (
+          <GoogleSignIn clientId={clientId} onSignIn={onSignIn} />
+        ))}
+
+      {!googleCred && (
+        <div>
+          {clientId && <p className={`${EYEBROW} mb-2`}>or play as guest</p>}
+          <div className="flex items-center border-b-2 border-rule focus-within:border-pink">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={20}
+              placeholder="YOUR HANDLE"
+              aria-label="Your handle"
+              className="w-full bg-transparent px-1 py-3 font-console text-lg uppercase tracking-widest text-bone placeholder:text-dim focus:outline-none"
+            />
+            {name.length === 0 && <span className="mr-1 h-5 w-2 animate-blink bg-pink" aria-hidden="true" />}
+          </div>
+        </div>
+      )}
 
       <button
-        onClick={() => canName && onCreate(name.trim())}
-        disabled={!canName}
+        onClick={() => canPlay && onCreate(identityName, idToken)}
+        disabled={!canPlay}
         className={`${BTN_AMBER} w-full`}
       >
         ▶ Create Room
@@ -237,8 +267,8 @@ function EntryScreen({ onCreate, onJoin }) {
             className="w-28 border border-rule bg-cabinet px-3 py-3 text-center font-console text-lg uppercase tracking-[0.3em] text-bone placeholder:text-dim focus:border-pink focus:outline-none"
           />
           <button
-            onClick={() => canName && code && onJoin(code, name.trim())}
-            disabled={!canName || !code}
+            onClick={() => canPlay && code && onJoin(code, identityName, idToken)}
+            disabled={!canPlay || !code}
             className={`${BTN_GHOST} flex-1`}
           >
             Join
@@ -247,6 +277,44 @@ function EntryScreen({ onCreate, onJoin }) {
       </div>
     </div>
   );
+}
+
+// Google Identity Services button. Renders nothing if no client ID is set (then
+// the app is guest-only). The credential is a Google ID token the server
+// re-verifies — the client never trusts it for identity.
+function GoogleSignIn({ clientId, onSignIn }) {
+  const ref = useRef(null);
+  const cbRef = useRef(onSignIn);
+  cbRef.current = onSignIn;
+  useEffect(() => {
+    if (!clientId) return;
+    let timer = null;
+    const init = () => {
+      const g = window.google && window.google.accounts && window.google.accounts.id;
+      if (!g || !ref.current) return false;
+      g.initialize({
+        client_id: clientId,
+        callback: (resp) => {
+          try {
+            const part = resp.credential.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+            const payload = JSON.parse(decodeURIComponent(escape(atob(part))));
+            cbRef.current({ name: payload.name || payload.email, idToken: resp.credential });
+          } catch {
+            /* ignore malformed token */
+          }
+        },
+      });
+      ref.current.innerHTML = "";
+      g.renderButton(ref.current, { theme: "filled_black", size: "large", text: "signin_with", shape: "rectangular" });
+      return true;
+    };
+    if (!init()) timer = setInterval(() => { if (init()) clearInterval(timer); }, 200);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [clientId]);
+  if (!clientId) return null;
+  return <div ref={ref} className="flex justify-center" />;
 }
 
 // ---------- Lobby ----------
@@ -278,6 +346,11 @@ function Lobby({ players, myId, isHost, onStart, code }) {
               <span className="flex items-center gap-3">
                 <span className="font-console text-xs text-cyan">{i + 1}UP</span>
                 <span className="font-console uppercase tracking-wide text-bone">{p.name}</span>
+                {p.google && (
+                  <span className="text-good" title="Google verified" aria-label="verified">
+                    ✓
+                  </span>
+                )}
               </span>
               <span className="flex items-center gap-3 font-console text-[10px] uppercase tracking-[0.2em]">
                 {p.id === myId && <span className="text-dim">· You</span>}
